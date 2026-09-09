@@ -74,6 +74,11 @@ static uint32_t      s_nodeinfo_last_ms = 0;
 // up in node lists out of the box.
 static bool          s_announce_on       = true;
 static uint32_t      s_announce_interval = 600000UL;   // 10 min
+// Periodic GPS position broadcast (tracker mode). Rides s_announce_on:
+// when the mesh is active we blast our own Position on this cadence so
+// gateways/maps (UDDA) plot us live. Only fires with a real fix.
+static uint32_t      s_pos_bcast_interval = 60000UL;   // 1 min
+static uint32_t      s_pos_bcast_last_ms  = 0;
 static bool          s_text_pending     = false;
 static char          s_pending_text[MESH_MAX_TEXT_LEN] = {0};
 // OTA dest for the next queued TEXT. 0xFFFFFFFF = broadcast (the
@@ -1684,6 +1689,25 @@ void meshtastic_bg_tick()
         s_cad_last_ms      = now;   // don't run CAD immediately after TX
         send_nodeinfo();
         send_telemetry_broadcast();
+        return;
+    }
+
+    // --- Periodic GPS position broadcast (tracker mode) ---
+    // Blast our own Position so other nodes and map gateways (UDDA) can
+    // plot us live on the mesh. Only when we actually have a fix; sending
+    // 0,0 would lie. One packet per bg_tick, same as the blocks around it.
+    if (s_announce_on && s_pos_bcast_interval > 0 &&
+        now - s_pos_bcast_last_ms >= s_pos_bcast_interval &&
+        gps_screen_has_lock() && instance.gps.location.isValid()) {
+        s_pos_bcast_last_ms = now;
+        s_cad_last_ms       = now;   // don't run CAD immediately after TX
+        double  la = instance.gps.location.lat();
+        double  lo = instance.gps.location.lng();
+        int32_t lat_i = (int32_t)(la >= 0 ? la * 1e7 + 0.5 : la * 1e7 - 0.5);
+        int32_t lon_i = (int32_t)(lo >= 0 ? lo * 1e7 + 0.5 : lo * 1e7 - 0.5);
+        int32_t alt_m = instance.gps.altitude.isValid()
+                            ? (int32_t)instance.gps.altitude.meters() : 0;
+        do_send_position(lat_i, lon_i, alt_m, 0xFFFFFFFFUL);   // broadcast
         return;
     }
 

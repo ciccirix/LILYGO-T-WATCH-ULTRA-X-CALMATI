@@ -1,6 +1,7 @@
 #include "map_screen.h"
 #include "gps_screen.h"
 #include "meshtastic.h"
+#include "car_finder.h"
 #include <LilyGoLib.h>
 #include <SD.h>
 #include <math.h>
@@ -39,6 +40,11 @@ static lv_obj_t *zoom_in_btn, *zoom_out_btn, *recentre_btn;
 // nodes currently have a known position + fall within the view.
 static lv_obj_t *node_dots[MESH_MAX_NODES];
 static lv_obj_t *node_labels[MESH_MAX_NODES];
+
+// Parked-car marker (find-my-car). Cyan pin + "AUTO" label, shown wherever the
+// saved car position falls in the current view.
+static lv_obj_t *car_dot;
+static lv_obj_t *car_label;
 
 // Per-tile path buffers — kept alive while LVGL uses them as the image source.
 static char  s_paths[TILES][80];
@@ -265,6 +271,32 @@ static void hide_peer_nodes()
     }
 }
 
+// Project the saved parking spot onto the current view and show/hide its marker.
+static void render_car(double view_lat, double view_lon)
+{
+    double clat, clon;
+    if (!car_finder_get(&clat, &clon)) {
+        lv_obj_add_flag(car_dot,   LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(car_label, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    double lon_dpp = lon_per_px(s_zoom);
+    double lat_dpp = lat_per_px(s_zoom, view_lat);
+    double dx_px =  (clon - view_lon) / lon_dpp;
+    double dy_px = -(clat - view_lat) / lat_dpp;
+    int sx = (int)(MAP_W / 2.0 + dx_px);
+    int sy = (int)(MAP_H / 2.0 + dy_px);
+    if (sx < -10 || sx >= MAP_W + 10 || sy < -10 || sy >= MAP_H + 20) {
+        lv_obj_add_flag(car_dot,   LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(car_label, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_align(car_dot,   LV_ALIGN_TOP_LEFT, sx - 7, sy - 7);
+    lv_obj_align(car_label, LV_ALIGN_TOP_LEFT, sx - 16, sy + 9);
+    lv_obj_clear_flag(car_dot,   LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(car_label, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void refresh(bool force)
 {
     // Three-source fallback chain for the map centre:
@@ -344,13 +376,8 @@ static void refresh(bool force)
     // to dodge LVGL's builtin vsnprintf, which has trouble with %s
     // args trailing %.4f doubles on RV32 soft-float (same bug we hit
     // on the P4).
-    const char *src_tag =
-        (src == Source::LIVE)  ? "" :
-        (src == Source::SAVED) ? "  (saved)" : "  (no fix)";
-    const char *pan_tag = s_manual_pan ? "  *" : "";
-    char info[64];
-    snprintf(info, sizeof(info), "MAP  z%d  %.4f, %.4f%s%s",
-             s_zoom, lat, lon, src_tag, pan_tag);
+    char info[48];
+    snprintf(info, sizeof(info), "%.4f, %.4f", lat, lon);   // coords only, centred
     lv_label_set_text(info_label, info);
 
     // Plot every other node we've heard a position from. Always uses
@@ -358,6 +385,7 @@ static void refresh(bool force)
     // depending on s_manual_pan), so peer dots track pan and zoom
     // without any extra work.
     render_peer_nodes(lat, lon);
+    render_car(lat, lon);
 }
 
 // ---- events ----------------------------------------------------------------
@@ -521,9 +549,33 @@ void map_screen_create()
         lv_obj_add_flag(node_labels[i], LV_OBJ_FLAG_HIDDEN);
     }
 
+    // Parked-car marker — cyan dot + "AUTO" label, distinct from the red GPS
+    // marker and the green peer dots. Hidden until a car position is saved.
+    car_dot = lv_obj_create(map_screen);
+    lv_obj_set_size(car_dot, 14, 14);
+    lv_obj_set_style_radius(car_dot, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(car_dot, lv_color_make(0x00, 0xE5, 0xFF), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(car_dot, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_color(car_dot, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_border_width(car_dot, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(car_dot, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(car_dot, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(car_dot, LV_OBJ_FLAG_HIDDEN);
+
+    car_label = lv_label_create(map_screen);
+    lv_obj_set_style_text_color(car_label, lv_color_make(0x00, 0xE5, 0xFF), LV_PART_MAIN);
+    lv_obj_set_style_text_font(car_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(car_label, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(car_label, LV_OPA_60, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(car_label, 3, LV_PART_MAIN);
+    lv_obj_set_style_pad_ver(car_label, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(car_label, 3, LV_PART_MAIN);
+    lv_label_set_text(car_label, "AUTO");
+    lv_obj_add_flag(car_label, LV_OBJ_FLAG_HIDDEN);
+
     // Info badge floating at the top: "MAP z<level> lat,lon"
     info_badge = lv_obj_create(map_screen);
-    lv_obj_set_size(info_badge, LV_SIZE_CONTENT, 28);
+    lv_obj_set_size(info_badge, LV_SIZE_CONTENT, 36);
     lv_obj_set_style_bg_color(info_badge, lv_color_black(), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(info_badge, LV_OPA_70, LV_PART_MAIN);
     lv_obj_set_style_border_width(info_badge, 0, LV_PART_MAIN);
@@ -535,7 +587,7 @@ void map_screen_create()
 
     info_label = lv_label_create(info_badge);
     lv_obj_set_style_text_color(info_label, lv_color_make(0x00, 0xFF, 0x00), LV_PART_MAIN);
-    lv_obj_set_style_text_font(info_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_font(info_label, &lv_font_montserrat_20, LV_PART_MAIN);
     lv_label_set_text(info_label, "MAP");
     lv_obj_center(info_label);
 
@@ -588,6 +640,23 @@ void map_screen_show()
 bool map_screen_is_active()
 {
     return lv_screen_active() == map_screen;
+}
+
+void map_screen_focus(double lat, double lon)
+{
+    if (!map_screen) map_screen_create();
+    main_loop_request_lvgl_priority(12);
+    detect_zooms();
+    // Finding a parked car needs street-level detail, not a country view:
+    // jump straight to the closest zoom the SD actually has tiles for.
+    s_zoom = s_zoom_max;
+    if (s_zoom < s_zoom_min) s_zoom = s_zoom_min;
+    // Pin the view to the requested point (the parked car) instead of GPS.
+    s_manual_pan = true;
+    s_view_lat   = lat;
+    s_view_lon   = lon;
+    refresh(true);
+    lv_scr_load(map_screen);
 }
 
 bool map_screen_available()

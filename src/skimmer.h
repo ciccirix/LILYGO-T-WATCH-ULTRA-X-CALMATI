@@ -31,5 +31,11 @@ void skimmer_reset_count();   // zero the count + dedup table (per-session reset
 bool skimmer_check(const uint8_t *mac6, int8_t rssi, uint8_t addr_type,
                    const uint8_t *adv, int adv_len);
 
+// Shared match used by both the detector and the interactive screen: true if
+// the advertisement looks like a BT/BLE serial module (name prefix, or the
+// advertised serial service 0xFFE0/0xFFF0). name_out receives the advertised
+// name, or "" when only the service UUID matched (a renamed module).
+bool skimmer_ad_match(const uint8_t *adv, int adv_len, char *name_out, int name_sz);
+
 // Drains queued detections and writes them to the SD card. Call from loop().
 void skimmer_bg_tick();

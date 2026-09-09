@@ -1,0 +1,34 @@
+<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>13:37 Serial Console</title>
+<style>
+  body{font-family:system-ui,sans-serif;background:#0c1016;color:#eef2f7;margin:0;padding:12px}
+  button{background:#22cc66;color:#06241a;border:0;border-radius:6px;padding:8px 16px;font-size:15px;cursor:pointer}
+  #o{background:#000;color:#00ff66;font-family:ui-monospace,Consolas,monospace;font-size:13px;
+     padding:10px;height:78vh;overflow:auto;white-space:pre-wrap;margin-top:10px;border-radius:6px}
+  .hint{font-size:13px;color:#7b8aa0;margin:6px 0}
+</style></head><body>
+  <button id="c">Connect (115200)</button>
+  <button id="x">Clear</button>
+  <div class="hint">Click Connect &rarr; pick the T-Watch port (COM13 / "USB Serial Device") &rarr; then open BLE Audit on the watch and watch the <b>[BLE]</b> lines.</div>
+  <div id="o"></div>
+<script>
+  const o = document.getElementById('o');
+  function log(t){ o.textContent += t; o.scrollTop = o.scrollHeight; }
+  document.getElementById('x').onclick = () => o.textContent = '';
+  document.getElementById('c').onclick = async () => {
+    if (!('serial' in navigator)) { log('WebSerial not supported — use Chrome/Edge desktop.\n'); return; }
+    try {
+      const port = await navigator.serial.requestPort();
+      await port.open({ baudRate: 115200 });
+      log('--- connected ---\n');
+      const dec = new TextDecoder();
+      const reader = port.readable.getReader();
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) log(dec.decode(value));
+      }
+    } catch (e) { log('\n[error] ' + e.message + '\n'); }
+  };
+</script></body></html>

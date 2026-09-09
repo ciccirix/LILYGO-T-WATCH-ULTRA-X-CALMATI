@@ -170,12 +170,12 @@ void onboarding_screen_create()
     lv_obj_set_style_text_font(title, &lv_font_montserrat_20, LV_PART_MAIN);
     lv_obj_set_style_text_color(title, lv_color_make(0xFF, 0xAA, 0x33), LV_PART_MAIN);
     lv_label_set_text(title, "USO AUTORIZZATO / AUTHORIZED USE");
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 24);   // lower: clears the rounded top + no box overlap
 
     // scrollable disclaimer
     lv_obj_t *box = lv_obj_create(screen);
-    lv_obj_set_size(box, 404, 286);
-    lv_obj_align(box, LV_ALIGN_TOP_MID, 0, 40);
+    lv_obj_set_size(box, 360, 270);   // narrower than the 410 panel so it clears the rounded corners
+    lv_obj_align(box, LV_ALIGN_TOP_MID, 0, 56);
     lv_obj_set_style_bg_color(box, lv_color_make(0x0d, 0x0f, 0x12), LV_PART_MAIN);
     lv_obj_set_style_border_color(box, lv_color_make(0x33, 0x33, 0x33), LV_PART_MAIN);
     lv_obj_set_style_border_width(box, 1, LV_PART_MAIN);
@@ -183,7 +183,7 @@ void onboarding_screen_create()
     lv_obj_set_style_pad_all(box, 10, LV_PART_MAIN);
     lv_obj_set_scroll_dir(box, LV_DIR_VER);
     lv_obj_t *txt = lv_label_create(box);
-    lv_obj_set_width(txt, 380);
+    lv_obj_set_width(txt, 336);   // box (360) minus the 10px padding on each side
     lv_label_set_long_mode(txt, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(txt, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(txt, lv_color_make(0xCC, 0xCC, 0xCC), LV_PART_MAIN);
@@ -193,6 +193,11 @@ void onboarding_screen_create()
     lv_checkbox_set_text(cb, "Confermo l'uso autorizzato / I confirm authorized use");
     lv_obj_set_style_text_font(cb, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(cb, lv_color_white(), LV_PART_MAIN);
+    // Bigger tick box — the default indicator is tiny and hard to hit.
+    lv_obj_set_style_width(cb, 30, LV_PART_INDICATOR);
+    lv_obj_set_style_height(cb, 30, LV_PART_INDICATOR);
+    lv_obj_set_style_border_width(cb, 2, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(cb, 4, LV_PART_INDICATOR);
     lv_obj_align(cb, LV_ALIGN_TOP_MID, 0, 334);
 
     lv_obj_t *el = lv_label_create(screen);
@@ -204,7 +209,7 @@ void onboarding_screen_create()
     email_ta = lv_textarea_create(screen);
     lv_textarea_set_one_line(email_ta, true);
     lv_textarea_set_placeholder_text(email_ta, "you@example.com");
-    lv_obj_set_size(email_ta, 404, 42);
+    lv_obj_set_size(email_ta, 360, 42);
     lv_obj_align(email_ta, LV_ALIGN_TOP_MID, 0, 388);
     lv_obj_set_style_bg_color(email_ta, lv_color_make(0x11, 0x11, 0x11), LV_PART_MAIN);
     lv_obj_set_style_text_color(email_ta, lv_color_white(), LV_PART_MAIN);

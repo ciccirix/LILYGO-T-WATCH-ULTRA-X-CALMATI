@@ -14,6 +14,11 @@
 // channel, and spawns the TX task. Returns false if already running.
 bool deauther_start(const uint8_t bssid[6], uint8_t channel);
 
+// Knock ONE station off its AP: deauth targeted at a single client MAC (addr1),
+// spoofed from `bssid`. Kicks e.g. an IP camera off WiFi without disrupting the
+// rest of the network. Same radio takeover as deauther_start.
+bool deauther_start_client(const uint8_t client[6], const uint8_t bssid[6], uint8_t channel);
+
 // Stop the flood and return the radio to its pre-attack state.
 void deauther_stop();
 

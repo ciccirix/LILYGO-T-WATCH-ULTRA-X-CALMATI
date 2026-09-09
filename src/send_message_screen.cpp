@@ -19,7 +19,7 @@ void main_loop_request_lvgl_priority(int cycles);
 // Cap at 8 so the scrollable list stays scannable on the 410-disc.
 #define MAX_CUSTOM      8
 #define CUSTOM_MAX_LEN  120
-static const char *PRESET_MSG = "Hello Meshtastic!";
+static const char *PRESET_MSG = "CALMATI!!";
 static const char *CUSTOM_FILE = "/Meshtastic/custom_messages.txt";
 
 static lv_obj_t *send_screen;
@@ -308,17 +308,35 @@ static void on_card_long_pressed(lv_event_t *e)
     show_confirm(idx);
 }
 
+// Shared by the ✓ (ready) key and the Enter/newline key. Strips a trailing
+// newline the Enter key may have inserted before sending.
+static void do_send_compose()
+{
+    const char *raw = lv_textarea_get_text(compose_ta);
+    if (raw && raw[0]) {
+        char buf[CUSTOM_MAX_LEN];
+        strncpy(buf, raw, sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+        int n = (int)strlen(buf);
+        while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r' || buf[n - 1] == ' '))
+            buf[--n] = '\0';
+        if (buf[0]) { send_text(buf); add_custom(buf); }
+    }
+    hide_compose();
+    rebuild_list();
+}
+
 static void on_kb_event(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_READY) {
-        const char *text = lv_textarea_get_text(compose_ta);
-        if (text && text[0]) {
-            send_text(text);
-            add_custom(text);
-        }
-        hide_compose();
-        rebuild_list();
+        do_send_compose();                       // ✓ button
+    } else if (code == LV_EVENT_VALUE_CHANGED) {
+        // Make Enter (newline) send too, instead of just adding a line.
+        uint32_t id = lv_buttonmatrix_get_selected_button(keyboard);
+        const char *txt = lv_buttonmatrix_get_button_text(keyboard, id);
+        if (txt && (strcmp(txt, LV_SYMBOL_NEW_LINE) == 0 || strcmp(txt, "\n") == 0))
+            do_send_compose();
     } else if (code == LV_EVENT_CANCEL) {
         hide_compose();
     }
@@ -428,9 +446,11 @@ static void rebuild_list()
 
 static void show_compose()
 {
+    lv_obj_add_flag(title_label,  LV_OBJ_FLAG_HIDDEN);   // free the top while composing
     lv_obj_add_flag(list_box,     LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(nav_hint,     LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(compose_ta, LV_ALIGN_TOP_MID, 0, 8);    // textarea at the very top
     lv_textarea_set_text(compose_ta, "");
     lv_obj_clear_flag(compose_ta, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(keyboard,   LV_OBJ_FLAG_HIDDEN);
@@ -442,6 +462,7 @@ static void hide_compose()
 {
     lv_obj_add_flag(compose_ta, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(keyboard,   LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(title_label,  LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(list_box,     LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(status_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(nav_hint,     LV_OBJ_FLAG_HIDDEN);
@@ -514,8 +535,8 @@ void send_message_screen_create()
     // keyboard is rooted on the screen (not the list) so it stacks
     // above the cards via lv_obj_move_foreground.
     compose_ta = lv_textarea_create(send_screen);
-    lv_obj_set_size(compose_ta, 400, 100);
-    lv_obj_align(compose_ta, LV_ALIGN_TOP_MID, 0, 56);
+    lv_obj_set_size(compose_ta, 400, 56);
+    lv_obj_align(compose_ta, LV_ALIGN_TOP_MID, 0, 8);
     lv_textarea_set_max_length(compose_ta, CUSTOM_MAX_LEN - 1);
     lv_textarea_set_placeholder_text(compose_ta, "Type your message...");
     lv_obj_set_style_text_font(compose_ta, &lv_font_montserrat_20, LV_PART_MAIN);
@@ -526,11 +547,14 @@ void send_message_screen_create()
     lv_obj_add_flag(compose_ta, LV_OBJ_FLAG_HIDDEN);
 
     keyboard = lv_keyboard_create(send_screen);
-    lv_obj_set_size(keyboard, 410, 240);
-    lv_obj_align(keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_size(keyboard, 410, 430);          // piu' alta = tasti piu' grandi
+    lv_obj_align(keyboard, LV_ALIGN_BOTTOM_MID, 0, -4);
+    // Tasti grandi e leggibili sull'AMOLED 2".
+    lv_obj_set_style_text_font(keyboard, &lv_font_montserrat_28, LV_PART_ITEMS);
     lv_obj_add_flag(keyboard, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_event_cb(keyboard, on_kb_event, LV_EVENT_READY,  NULL);
-    lv_obj_add_event_cb(keyboard, on_kb_event, LV_EVENT_CANCEL, NULL);
+    lv_obj_add_event_cb(keyboard, on_kb_event, LV_EVENT_READY,         NULL);
+    lv_obj_add_event_cb(keyboard, on_kb_event, LV_EVENT_CANCEL,        NULL);
+    lv_obj_add_event_cb(keyboard, on_kb_event, LV_EVENT_VALUE_CHANGED, NULL);  // Enter=send
 
     // Delete confirmation modal - dim backdrop covering the screen,
     // inner panel with text + Cancel/Delete buttons.

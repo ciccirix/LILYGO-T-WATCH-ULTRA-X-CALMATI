@@ -30,6 +30,24 @@ static void update_status()
     lv_label_set_text(status_label, lora_powered ? "Radio: ON" : "Radio: OFF");
 }
 
+// Accende la radio LoRa mesh usando ESATTAMENTE la stessa sequenza del toggle
+// di questa schermata (l'unica provata a funzionare), cosi' la tile UDDA la
+// attiva in modo affidabile e l'indicatore a schermo resta coerente.
+void lora_screen_force_on()
+{
+    pager_stop();
+    tpms_stop();
+    aprs_stop();
+    instance.powerControl(POWER_RADIO, true);
+    instance.initLoRa();
+    radio.setRxBoostedGainMode(s_boosted_gain_enabled, true);
+    meshtastic_set_active(true);
+    lora_powered = true;
+    clock_screen_set_lora_active(true);
+    if (toggle_sw)     lv_obj_add_state(toggle_sw, LV_STATE_CHECKED);
+    if (status_label)  update_status();
+}
+
 static void make_data_row(lv_obj_t *parent, const char *field, lv_obj_t **val_out)
 {
     lv_obj_t *row = lv_obj_create(parent);

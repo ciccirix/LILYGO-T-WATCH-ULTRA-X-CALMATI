@@ -1,6 +1,8 @@
 #include "ble_scan_manager.h"
 #include "esp_bt.h"
 #include "esp_bt_main.h"
+#include "esp_wifi.h"
+#include <WiFi.h>
 
 #define BLE_SCAN_MAX_CONSUMERS 4
 
@@ -18,12 +20,24 @@ static void gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
     // Re-arm the scan after the controller acknowledges our params. If every
     // consumer left during the brief async window, do nothing.
     if (event == ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT) {
-        if (s_consumer_count > 0)
-            esp_ble_gap_start_scanning(0);
+        Serial.printf("[BLE] PARAM_SET_COMPLETE status=%d consumers=%d\n",
+                      param->scan_param_cmpl.status, s_consumer_count);
+        if (s_consumer_count > 0) {
+            esp_err_t r = esp_ble_gap_start_scanning(0);
+            Serial.printf("[BLE] start_scanning ret=%d\n", (int)r);
+        }
+        return;
+    }
+    if (event == ESP_GAP_BLE_SCAN_START_COMPLETE_EVT) {
+        Serial.printf("[BLE] SCAN_START_COMPLETE status=%d\n",
+                      param->scan_start_cmpl.status);
         return;
     }
     if (event != ESP_GAP_BLE_SCAN_RESULT_EVT) return;
     if (param->scan_rst.search_evt != ESP_GAP_SEARCH_INQ_RES_EVT) return;
+
+    static int s_rc = 0;
+    if (s_rc < 6) Serial.printf("[BLE] scan_result #%d\n", ++s_rc);
 
     // Fan out to every registered consumer. Each one applies its own filter.
     for (int i = 0; i < s_consumer_count; i++) {
@@ -38,20 +52,74 @@ static void gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
 // GATT-only user doesn't burn power sweeping channels it never reads.
 static bool stack_up()
 {
+    // This watch cannot run WiFi and Bluedroid at the same time (see the rule in
+    // scan_radio.cpp): bringing BLE up while WiFi is on hard-freezes the whole
+    // UI, and WiFi also holds ~50 KB of RAM the BT controller needs. So force the
+    // WiFi radio fully OFF here — the single choke point every BLE consumer
+    // passes through — before waking Bluedroid.
+    //
+    // WiFi.mode(WIFI_OFF) alone only *stops* the driver — it does NOT free the
+    // ~50 KB the WiFi driver holds. Bluedroid enable needs a big CONTIGUOUS
+    // block, and on a fragmented heap the largest free block can fall to ~24 KB,
+    // at which point esp_bluedroid_enable() doesn't fail cleanly — it HANGS the
+    // main task, killing the UI + touch + USB until the watchdog resets the
+    // watch. So fully tear the WiFi driver DOWN (stop + deinit) to reclaim its
+    // RAM, mirroring analyze_screen.cpp / deauther.cpp.
+    //
+    // Do this UNCONDITIONALLY: getMode()==WIFI_OFF only means "not associated",
+    // the driver can still be initialised and holding its RAM, so gating on it
+    // would skip the reclaim in exactly the low-memory case that hangs. The
+    // esp_wifi_* calls simply return ESP_ERR_WIFI_NOT_INIT (ignored) when the
+    // driver isn't up, so the unconditional path is safe.
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    esp_wifi_stop();
+    esp_wifi_deinit();
+    delay(80);
+
+    // BLE-only firmware: on the classic ESP32 the controller reserves RAM for
+    // BR/EDR we never use, so hand it back before init. The S3 has no Classic BT
+    // so this frees little here, but it's the correct, harmless call (returns an
+    // error we ignore if there's nothing to release or the controller isn't
+    // IDLE) and keeps the choke point right if this ever runs on an ESP32.
+    if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_IDLE) {
+        esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
+    }
+
+    Serial.printf("[BLE] stack_up: freeHeap=%u maxBlock=%u\n",
+                  (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+
+    // Safety net: if the largest contiguous block is still too small for the BT
+    // host to come up, bail out cleanly instead of freezing the whole watch. A
+    // failed audit that leaves the UI alive beats a lock-up that needs RESET.
+    if (ESP.getMaxAllocHeap() < 40 * 1024) {
+        Serial.printf("[BLE] stack_up ABORT: maxBlock %u < 40K, would hang\n",
+                      (unsigned)ESP.getMaxAllocHeap());
+        return false;
+    }
+
     bool ok = true;
     if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_IDLE) {
         esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
         ok = (esp_bt_controller_init(&bt_cfg) == ESP_OK);
+        Serial.printf("[BLE] controller_init ok=%d\n", ok);
     }
-    if (ok && esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_INITED)
+    if (ok && esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_INITED) {
         ok = (esp_bt_controller_enable(ESP_BT_MODE_BLE) == ESP_OK);
-    if (ok && esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_UNINITIALIZED)
+        Serial.printf("[BLE] controller_enable ok=%d\n", ok);
+    }
+    if (ok && esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_UNINITIALIZED) {
         ok = (esp_bluedroid_init() == ESP_OK);
-    if (ok && esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_INITIALIZED)
+        Serial.printf("[BLE] bluedroid_init ok=%d\n", ok);
+    }
+    if (ok && esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_INITIALIZED) {
         ok = (esp_bluedroid_enable() == ESP_OK);
-    if (!ok) return false;
+        Serial.printf("[BLE] bluedroid_enable ok=%d\n", ok);
+    }
+    if (!ok) { Serial.println("[BLE] stack_up FAILED"); return false; }
 
     esp_ble_gap_register_callback(gap_cb);
+    Serial.println("[BLE] stack_up OK");
     return true;
 }
 
@@ -67,7 +135,9 @@ static void arm_scanning()
     };
     // esp_ble_gap_set_scan_params will trigger SCAN_PARAM_SET_COMPLETE_EVT,
     // which gap_cb above turns into a start_scanning call.
-    esp_ble_gap_set_scan_params(&scan_params);
+    Serial.println("[BLE] arm_scanning: set_scan_params...");
+    esp_err_t r = esp_ble_gap_set_scan_params(&scan_params);
+    Serial.printf("[BLE] arm_scanning: set_scan_params ret=%d\n", (int)r);
 }
 
 static void tear_down_controller()

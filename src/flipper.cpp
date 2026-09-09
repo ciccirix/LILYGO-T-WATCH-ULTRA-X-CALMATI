@@ -76,8 +76,10 @@ static bool seen_recently_or_mark(const uint8_t *mac)
 // starting with "Flipper " (stock firmware) OR the Flipper BLE service UUID
 // 0x3082 (custom firmwares with a randomized name). Shared by the standalone
 // scanner and the wardriver.
-bool flipper_check(const uint8_t *mac6, int8_t rssi, uint8_t addr_type,
-                   const uint8_t *adv, int adv_len)
+// PURE signature test — walk the AD records for the "Flipper " name prefix or
+// the 0x3082 service UUID. No dedup, no logging, no threat-radar side effects.
+bool flipper_classify(const uint8_t *adv, int adv_len,
+                      char *name_out, int name_out_sz)
 {
     bool name_hit = false;   // local name begins with "Flipper "
     bool uuid_hit = false;   // advertises the Flipper service UUID
@@ -113,7 +115,25 @@ bool flipper_check(const uint8_t *mac6, int8_t rssi, uint8_t addr_type,
         pos += 1 + (int)seg_len;
     }
 
-    if (!name_hit && !uuid_hit) return false;
+    if (name_out && name_out_sz > 0) {
+        strncpy(name_out, name, name_out_sz - 1);
+        name_out[name_out_sz - 1] = '\0';
+    }
+    return name_hit || uuid_hit;
+}
+
+bool flipper_check(const uint8_t *mac6, int8_t rssi, uint8_t addr_type,
+                   const uint8_t *adv, int adv_len)
+{
+    char name[FLIPPER_NAME_MAX] = {0};
+    if (!flipper_classify(adv, adv_len, name, sizeof(name))) return false;
+
+    // Live serial feedback: fires on every Flipper advert (pre-dedup) so a test
+    // shows continuous hits. Silent unless a Flipper is actually in range.
+    Serial.printf("[flipper] %02X:%02X:%02X:%02X:%02X:%02X  rssi=%d  name=\"%s\"\n",
+                  mac6[0], mac6[1], mac6[2], mac6[3], mac6[4], mac6[5], (int)rssi,
+                  name[0] ? name : "(uuid 0x3082)");
+
     if (seen_recently_or_mark(mac6)) return false;
 
     if (!s_queue) s_queue = xQueueCreate(8, sizeof(FlipperHit));

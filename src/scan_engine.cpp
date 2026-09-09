@@ -7,6 +7,7 @@
 #include "flipper.h"
 #include "skimmer.h"
 #include "evil_twin.h"
+#include "handshake.h"
 #include "counter_tail.h"
 #include <Arduino.h>
 #include <string.h>
@@ -111,7 +112,9 @@ static void ble_cb(esp_ble_gap_cb_param_t *param)
         h.category = TR_CAT_FLOCK;
     if (airtag_check(res.bda, h.rssi, res.ble_addr_type, res.ble_adv, total_len))
         h.category = TR_CAT_AIRTAG;
-    if (flipper_check(res.bda, h.rssi, res.ble_addr_type, res.ble_adv, total_len))
+    // PURE classify — the Scanner must tag on the signature every time, not rely
+    // on flipper_check's 5-min dedup (a recently-seen MAC would never get tagged).
+    if (flipper_classify(res.ble_adv, total_len))
         h.category = TR_CAT_FLIPPER;
     if (skimmer_check(res.bda, h.rssi, res.ble_addr_type, res.ble_adv, total_len))
         h.category = TR_CAT_SKIMMER;
@@ -175,6 +178,18 @@ static void fold_hit(const ScanHit *h, uint32_t now)
 void scan_engine_start()
 {
     if (s_running) return;
+
+    // Take EXCLUSIVE control of the radios. The standalone switch-detectors run
+    // their own continuous BLE scan / WiFi-promiscuous capture; leaving one on
+    // while scan_radio time-slices WiFi+BLE recreates the WiFi-promiscuous + BLE
+    // simultaneity that reliably crashes this build. Stop them all first (each
+    // is a no-op if it wasn't running) so the Scanner can't collide with them.
+    flipper_stop();
+    airtag_stop();
+    skimmer_stop();
+    flock_stop();
+    handshake_stop();
+
     if (!s_queue) s_queue = xQueueCreate(SCAN_QUEUE_LEN, sizeof(ScanHit));
     scan_engine_reset();
     scan_radio_start(wifi_cb, ble_cb);

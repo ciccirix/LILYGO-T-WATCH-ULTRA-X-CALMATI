@@ -25,6 +25,17 @@
 #include "tools_screen.h"
 #include "camera_screen.h"
 #include "deauther_screen.h"
+#include "arp_mitm_screen.h"
+#include "ble_pair_screen.h"
+#include "skimmer_screen.h"
+#include "drone_screen.h"
+#include "gatt_explorer_screen.h"
+#include "phantom_flood_screen.h"
+#include "rid_spoof_screen.h"
+#include "subghz_sentinel_screen.h"
+#include "printer_screen.h"
+#include "mifare_screen.h"
+#include "badusb_screen.h"
 #include "waterfall_screen.h"
 #include "espnow_screen.h"
 #include "esp_now_link.h"
@@ -52,6 +63,7 @@
 #include "wardriver_screen.h"
 #include "nfc_screen.h"
 #include "nfc_write_screen.h"
+#include "nfc_credit_screen.h"
 #include "stopwatch_screen.h"
 #include "timer_screen.h"
 #include "alarm.h"
@@ -65,6 +77,11 @@
 #include "flock.h"
 #include "threat_radar.h"
 #include "threat_radar_screen.h"
+#include "adsb_screen.h"
+#include "mic_screen.h"
+#include "webpanel_screen.h"
+#include "webpanel.h"
+#include "console.h"
 #include "phone_link.h"
 #include "pet_screen.h"
 #include "handshake.h"
@@ -304,25 +321,25 @@ static void build_analog_clock(lv_obj_t *screen)
     lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
 }
 
-// DEF CON 34 opens Thu 6 Aug 2026 in Las Vegas (~08:00 PDT ≈ 17:00 Italy). Target
-// that local-time instant and count down from the RTC; shows "IN CORSO" during
-// the con (6-9 Aug), then just the name afterwards.
+// DEF CON 34 is over; count down to DEF CON 35 — Thu 5 Aug 2027 in Las Vegas
+// (~08:00 PDT ≈ 17:00 Italy). Target that local-time instant and count down from
+// the RTC; shows "IN CORSO" during the con (5-8 Aug), then just the name.
 static void update_defcon_countdown(const struct tm *now_in)
 {
     if (!defcon_countdown) return;
     struct tm now = *now_in;                 // local time (already offset-adjusted)
     struct tm tgt = {};
-    tgt.tm_year = 2026 - 1900; tgt.tm_mon = 8 - 1; tgt.tm_mday = 6;
+    tgt.tm_year = 2027 - 1900; tgt.tm_mon = 8 - 1; tgt.tm_mday = 5;
     tgt.tm_hour = 17; tgt.tm_isdst = -1;
     long diff = (long)(mktime(&tgt) - mktime(&now));
     if (diff > 0) {
         long d = diff / 86400, h = (diff % 86400) / 3600, m = (diff % 3600) / 60;
         lv_label_set_text_fmt(defcon_countdown,
-            "DEF CON 34  " LV_SYMBOL_RIGHT "  %ldg %ldh %ldm", d, h, m);
-    } else if (diff > -4L * 86400) {         // during the con (6-9 Aug)
-        lv_label_set_text(defcon_countdown, LV_SYMBOL_WARNING "  DEF CON 34  " LV_SYMBOL_WARNING);
+            "DEF CON 35  " LV_SYMBOL_RIGHT "  %ldg %ldh %ldm", d, h, m);
+    } else if (diff > -4L * 86400) {         // during the con (5-8 Aug)
+        lv_label_set_text(defcon_countdown, LV_SYMBOL_WARNING "  DEF CON 35  " LV_SYMBOL_WARNING);
     } else {
-        lv_label_set_text(defcon_countdown, "DEF CON 34");
+        lv_label_set_text(defcon_countdown, "DEF CON 35");
     }
 }
 
@@ -657,6 +674,12 @@ static void update_wardriver_indicator()
 
 static void on_clock_gesture(lv_event_t *e)
 {
+    // Duress disguise: navigation is locked on the clock face. Swallow every
+    // swipe here so no target screen even briefly renders (before, the loop's
+    // fallback bounced back to the clock a frame later — you could glimpse the
+    // Tools icons). Long-press 4 s still disarms.
+    if (stealth_active()) return;
+
     lv_indev_t *indev = lv_event_get_indev(e);
     lv_dir_t dir = lv_indev_get_gesture_dir(indev);
     if (dir == LV_DIR_LEFT)
@@ -1656,6 +1679,7 @@ void setup()
     lora_screen_create();
     nfc_screen_create();
     nfc_write_screen_create();
+    nfc_credit_screen_create();
     meshtastic_screen_create();
     nodes_screen_create();
     send_message_screen_create();
@@ -1667,6 +1691,9 @@ void setup()
     tools_screen_create();
     espnow_screen_create();
     threat_radar_screen_create();
+    adsb_screen_create();
+    mic_screen_create();
+    webpanel_screen_create();
     pet_screen_create();
     tpms_screen_create();
     pager_screen_create();
@@ -1683,6 +1710,17 @@ void setup()
     lora_analyze_screen_create();
     camera_screen_create();
     deauther_screen_create();
+    arp_mitm_screen_create();
+    ble_pair_screen_create();
+    skimmer_screen_create();
+    drone_screen_create();
+    gatt_explorer_screen_create();
+    phantom_flood_screen_create();
+    rid_spoof_screen_create();
+    subghz_sentinel_screen_create();
+    printer_screen_create();
+    mifare_screen_create();
+    badusb_screen_create();
     waterfall_screen_create();
     onboarding_screen_create();
     stopwatch_screen_create();
@@ -1778,6 +1816,10 @@ void setup()
     timezone_load_on_boot();
     timezone_init();
 
+    // /wifi.txt sulla SD e' AUTORITATIVO: se c'e', sovrascrive la rete salvata
+    // (cosi' basta lasciare il file per puntare il watch all'hotspot UDDA,
+    // senza toccare la tastierina ne' cancellare la NVS).
+    wifi_creds_seed_from_sd();
     // Auto-connect to a remembered WiFi (or one seeded from /wifi.txt on the SD),
     // so NTP + geolocation come up without ever touching the tiny keyboard.
     wifi_creds_autoconnect();
@@ -1789,6 +1831,8 @@ void loop()
     motion_wake_poll();   // accel-driven wake; no-op when toggle is off
     scan_radio_tick();    // unified Scanner: switch WiFi/BLE slices; no-op when idle
     evil_portal_tick();   // Evil Twin captive portal: serve DNS+HTTP; no-op when idle
+    webpanel_tick();      // web control panel: serve HTTP; no-op when idle
+    console_serial_tick();// USB-serial command console
     timezone_bg_tick();   // apply background WiFi NTP/geolocation results
     onboarding_bg_tick(); // send the one-time install ping once WiFi is available
     // Cheap on every iteration (an indev_state read + a millis() compare);
@@ -1861,10 +1905,49 @@ void loop()
                 // Halt any in-progress deauth flood and tear the radio back down.
                 deauther_screen_stop();
                 tools_screen_show();
+            } else if (arp_mitm_screen_is_active()) {
+                // Stop any poison loop, heal the ARP caches, restore the radio.
+                arp_mitm_screen_stop();
+                tools_screen_show();
+            } else if (ble_pair_screen_is_active()) {
+                // Detach the passive BLE scan consumer before leaving.
+                ble_pair_screen_stop();
+                tools_screen_show();
+            } else if (skimmer_screen_is_active()) {
+                skimmer_screen_stop();
+                tools_screen_show();
+            } else if (drone_screen_is_active()) {
+                drone_screen_stop();
+                tools_screen_show();
+            } else if (gatt_explorer_screen_is_active()) {
+                gatt_explorer_screen_stop();
+                tools_screen_show();
+            } else if (phantom_flood_screen_is_active()) {
+                phantom_flood_screen_stop();
+                tools_screen_show();
+            } else if (rid_spoof_screen_is_active()) {
+                rid_spoof_screen_stop();
+                tools_screen_show();
+            } else if (subghz_sentinel_screen_is_active()) {
+                subghz_sentinel_screen_stop();
+                tools_screen_show();
+            } else if (printer_screen_is_active()) {
+                printer_screen_stop();
+                tools_screen_show();
+            } else if (mifare_screen_is_active()) {
+                // Deactivate + power the NFC field down before leaving.
+                mifare_screen_stop();
+                tools_screen_show();
+            } else if (badusb_screen_is_active()) {
+                // Abort any in-progress keystroke injection before leaving.
+                badusb_screen_stop();
+                tools_screen_show();
             } else if (waterfall_screen_is_active()) {
                 // Release the promiscuous WiFi so the band analyzer isn't left
                 // channel-locked after we leave.
                 waterfall_screen_stop();
+                tools_screen_show();
+            } else if (nfc_credit_screen_is_active()) {
                 tools_screen_show();
             } else if (lv_screen_active() == clock_screen) {
                 settings_screen_show();
@@ -1941,6 +2024,8 @@ void loop()
         portscan_poll();  // writes /PingSweeps/portscan_* once a scan finishes
         nfc_screen_worker();
         nfc_write_screen_worker();
+        nfc_credit_screen_worker();
+        mifare_screen_worker();
     }
     lv_task_handler();
 

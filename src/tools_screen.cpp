@@ -1,7 +1,17 @@
 #include "tools_screen.h"
+#include "esp32-hal-tinyusb.h"    // usb_persist_restart(RESTART_BOOTLOADER) — tile Download
+#include "gps_screen.h"           // gps_screen_power_on() per la tile UDDA
+#include "meshtastic.h"           // meshtastic_set_active/announce/short_name
+#include "meshtastic_screen.h"    // meshtastic_screen_show()
+#include "lora_screen.h"          // lora_screen_force_on() per la tile UDDA
+#include "voice_screen.h"         // voice_screen_show() per la tile Assistente
+#include <LilyGoLib.h>            // instance, radio, POWER_RADIO, initLoRa
+#include "pager.h"                // pager_stop()  (libera la radio SX1262)
+#include "tpms.h"                 // tpms_stop()
+#include "aprs.h"                 // aprs_stop()
 #include "airtag.h"
-#include "flipper.h"
 #include "skimmer.h"
+#include "skimmer_screen.h"
 #include "evil_twin.h"
 #include "evil_twin_screen.h"
 #include "flock.h"
@@ -14,7 +24,15 @@
 #include "wifi_screen.h"
 #include "analyze_screen.h"
 #include "threat_radar_screen.h"
+#include "adsb_screen.h"
+#include "mic_screen.h"
+#include "webpanel_screen.h"
+#include "calmati_remote_screen.h"
+
+// Calmati brand logo (1-bit A1 mask, src/calmati_icon.c — C linkage).
+extern "C" const lv_image_dsc_t calmati_icon;
 #include "scan_screen.h"
+#include "car_screen.h"
 #include "meta_screen.h"
 #include "task_manager.h"
 #include "pet_screen.h"
@@ -22,9 +40,20 @@
 #include "handshake.h"
 #include "camera_screen.h"
 #include "deauther_screen.h"
+#include "arp_mitm_screen.h"
+#include "ble_pair_screen.h"
+#include "drone_screen.h"
+#include "gatt_explorer_screen.h"
+#include "phantom_flood_screen.h"
+#include "rid_spoof_screen.h"
+#include "subghz_sentinel_screen.h"
+#include "printer_screen.h"
+#include "tile_icons.h"
+#include "mifare_screen.h"
+#include "badusb_screen.h"
 #include "waterfall_screen.h"
 #include "espnow_screen.h"
-#include "garage.h"
+#include "nfc_credit_screen.h"
 #include <LilyGoLib.h>
 
 // Defined in main.cpp
@@ -33,7 +62,6 @@ void main_loop_request_lvgl_priority(int cycles);
 
 static lv_obj_t *tools_screen;
 static lv_obj_t *t_airtag;    // referenced by on_airtag_clicked for colour swap
-static lv_obj_t *t_flipper;   // referenced by on_flipper_clicked for colour swap
 static lv_obj_t *t_skimmer;   // referenced by on_skimmer_clicked for colour swap
 static lv_obj_t *t_eviltwin;  // opens the active Evil Twin panel (no colour swap)
 static lv_obj_t *t_flock;     // referenced by on_flock_clicked for colour swap
@@ -80,25 +108,6 @@ static void on_airtag_clicked(lv_event_t *e)
     }
 }
 
-static void set_flipper_tile_running(bool running)
-{
-    lv_obj_set_style_bg_color(t_flipper,
-        running ? lv_color_make(0x00, 0x55, 0x22)
-                : lv_color_make(0x11, 0x11, 0x11),
-        LV_PART_MAIN);
-}
-
-static void on_flipper_clicked(lv_event_t *e)
-{
-    if (flipper_is_running()) {
-        flipper_stop();
-        set_flipper_tile_running(false);
-    } else {
-        bool ok = flipper_start();
-        set_flipper_tile_running(ok);   // stays gray if BT init failed
-    }
-}
-
 static void set_skimmer_tile_running(bool running)
 {
     lv_obj_set_style_bg_color(t_skimmer,
@@ -109,13 +118,9 @@ static void set_skimmer_tile_running(bool running)
 
 static void on_skimmer_clicked(lv_event_t *e)
 {
-    if (skimmer_is_running()) {
-        skimmer_stop();
-        set_skimmer_tile_running(false);
-    } else {
-        bool ok = skimmer_start();
-        set_skimmer_tile_running(ok);   // stays gray if BT init failed
-    }
+    // Opens the dedicated interactive scanner (bounded scan through the fixed
+    // stack_up — no more freezing background toggle).
+    skimmer_screen_show();
 }
 
 // The evil-twin DETECTOR now runs inside the unified Scanner, so this tile is
@@ -181,6 +186,17 @@ static void on_handshake_clicked(lv_event_t *)
 // The icon-drawing helpers below fill the upper portion using LVGL primitives
 // (no image assets needed). The tile is clickable so future feature wiring
 // is a single lv_obj_add_event_cb call per tile.
+// Force the ROM USB/UART download mode on the next boot, then reset. Lets us
+// reflash the watch without the BOOT-button dance: it reappears as the ROM
+// USB-JTAG (esptool-ready), then reboots to normal after flashing.
+static void enter_download_mode()
+{
+    // TinyUSB (USB-OTG) board: this persists USB and reboots into the ROM
+    // USB-Serial-JTAG bootloader with the USB link kept alive, so the watch
+    // re-enumerates ready for esptool (same effect as the DTR/RTS reset-dance).
+    usb_persist_restart(RESTART_BOOTLOADER);
+}
+
 static lv_obj_t *make_tile(lv_obj_t *parent, const char *label_text)
 {
     lv_obj_t *tile = lv_obj_create(parent);
@@ -213,72 +229,6 @@ static void tile_icons_passthrough(lv_obj_t *obj)
         lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICKABLE);
         tile_icons_passthrough(c);
     }
-}
-
-// Cancello (garage) — a roll-up door with horizontal slats and two little RF
-// waves rising off the top, for the 433 MHz gate-remote transmit tile.
-static void draw_garage_icon(lv_obj_t *tile)
-{
-    lv_color_t door = lv_color_make(0x55, 0x55, 0x55);
-    lv_color_t edge = lv_color_make(0x99, 0x99, 0x99);
-    lv_color_t slat = lv_color_make(0x22, 0x22, 0x22);
-    lv_color_t wave = lv_color_make(0xFF, 0xAA, 0x33);
-
-    lv_obj_t *d = lv_obj_create(tile);
-    lv_obj_set_size(d, 96, 74);
-    lv_obj_set_style_radius(d, 4, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(d, door, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(d, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_color(d, edge, LV_PART_MAIN);
-    lv_obj_set_style_border_width(d, 3, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(d, 0, LV_PART_MAIN);
-    lv_obj_clear_flag(d, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align(d, LV_ALIGN_TOP_MID, 0, 62);
-
-    for (int i = 0; i < 3; i++) {
-        lv_obj_t *s = lv_obj_create(d);
-        lv_obj_set_size(s, 84, 2);
-        lv_obj_set_style_bg_color(s, slat, LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(s, LV_OPA_COVER, LV_PART_MAIN);
-        lv_obj_set_style_border_width(s, 0, LV_PART_MAIN);
-        lv_obj_set_style_pad_all(s, 0, LV_PART_MAIN);
-        lv_obj_clear_flag(s, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_align(s, LV_ALIGN_TOP_MID, 0, 16 + i * 18);
-    }
-
-    // two RF waves rising from the top-right corner
-    for (int i = 0; i < 2; i++) {
-        lv_obj_t *w = lv_obj_create(tile);
-        lv_obj_set_size(w, 4 + i * 10, 4 + i * 10);
-        lv_obj_set_style_radius(w, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(w, LV_OPA_TRANSP, LV_PART_MAIN);
-        lv_obj_set_style_border_color(w, wave, LV_PART_MAIN);
-        lv_obj_set_style_border_width(w, 2, LV_PART_MAIN);
-        lv_obj_set_style_pad_all(w, 0, LV_PART_MAIN);
-        lv_obj_clear_flag(w, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_align(w, LV_ALIGN_TOP_MID, 44, 44 - i * 6);
-    }
-}
-
-// Cancello tap feedback: light the tile amber + buzz so it's obvious the code is
-// going out, transmit (~0.5 s, blocking), then a short green "sent" (or red
-// "busy/failed") flash before returning to normal. lv_refr_now paints the amber
-// BEFORE the blocking transmit so the flash is actually visible.
-static void on_garage_clicked(lv_event_t *e)
-{
-    lv_obj_t *tile = (lv_obj_t *)lv_event_get_current_target(e);
-    lv_obj_set_style_bg_color(tile, lv_color_make(0xFF, 0xAA, 0x33), LV_PART_MAIN);
-    lv_refr_now(NULL);
-    instance.vibrator();
-
-    bool ok = garage_transmit();
-
-    lv_obj_set_style_bg_color(tile, ok ? lv_color_make(0x00, 0x88, 0x33)
-                                       : lv_color_make(0x88, 0x00, 0x00), LV_PART_MAIN);
-    lv_refr_now(NULL);
-    delay(250);
-    lv_obj_set_style_bg_color(tile, lv_color_black(), LV_PART_MAIN);
-    lv_refr_now(NULL);
 }
 
 // Upper-left: WiFi — signal glyph in cyan, for the site-survey / ping-sweep tool
@@ -364,32 +314,95 @@ static void draw_airtag_icon(lv_obj_t *tile)
     lv_obj_align(dot, LV_ALIGN_TOP_MID, 0, 60);
 }
 
-// Flipper Zero — stylized leaping dolphin (the Flipper mascot), facing LEFT
-// like the Flipper Zero logo. The silhouette is layered from rounded pills to
-// form a tapered body (head → torso → peduncle), with a backward-leaning
-// dorsal fin and a horizontal two-lobe fluke at the back. The fin + V-fluke
-// pair are what make it read as a dolphin at a glance.
-// Defined in flipper_logo_img.c — 1-bit alpha mask of the canonical
-// Flipper Zero dolphin logo (120×80), generated from the official PNG
-// by tools/gen_flipper_logo.py. Recoloured to brand orange at draw time
-// via the image widget's style.
-extern "C" const lv_image_dsc_t flipper_logo_img;
+// Small helper: a filled circle on the tile at (dx,dy) from top-mid.
+static lv_obj_t *icon_dot(lv_obj_t *tile, int sz, lv_color_t col, int dx, int dy) {
+    lv_obj_t *o = lv_obj_create(tile);
+    lv_obj_set_size(o, sz, sz);
+    lv_obj_set_style_radius(o, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(o, col, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(o, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(o, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(o, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(o, LV_ALIGN_TOP_MID, dx, dy);
+    return o;
+}
+static lv_obj_t *icon_rect(lv_obj_t *tile, int w, int h, int rad, lv_color_t col, int dx, int dy) {
+    lv_obj_t *o = lv_obj_create(tile);
+    lv_obj_set_size(o, w, h);
+    lv_obj_set_style_radius(o, rad, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(o, col, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(o, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(o, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(o, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(o, LV_ALIGN_TOP_MID, dx, dy);
+    return o;
+}
 
-static void draw_flipper_icon(lv_obj_t *tile)
-{
-    lv_color_t flip_orange = lv_color_make(0xFF, 0x82, 0x00);
-
+// Glyph-Neon image icons (generated by tools/gen_tile_icons.py, ARGB8888 84x84).
+static void place_icon(lv_obj_t *tile, const lv_image_dsc_t *dsc) {
     lv_obj_t *img = lv_image_create(tile);
-    lv_image_set_src(img, &flipper_logo_img);
-    // A1 images are an alpha mask only — LVGL draws the image_recolor
-    // style colour where the mask is 1 and nothing where it's 0, so the
-    // orange tint is applied here at draw time rather than baked into
-    // the bitmap.
-    lv_obj_set_style_image_recolor(img, flip_orange, LV_PART_MAIN);
-    lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, LV_PART_MAIN);
-    // Centre-ish inside the tile; the label sits at the bottom so we
-    // anchor a bit higher than dead-centre.
+    lv_image_set_src(img, dsc);
     lv_obj_align(img, LV_ALIGN_TOP_MID, 0, 26);
+}
+
+// Drone ID — quadcopter: central body + 4 rotor discs.
+static void draw_drone_icon(lv_obj_t *tile) {
+    lv_color_t blue = lv_color_make(0x33, 0xcc, 0xff);
+    icon_dot(tile, 20, blue, 0, 44);              // body
+    icon_dot(tile, 16, blue, -30, 30);            // NW rotor
+    icon_dot(tile, 16, blue,  30, 30);            // NE rotor
+    icon_dot(tile, 16, blue, -30, 62);            // SW rotor
+    icon_dot(tile, 16, blue,  30, 62);            // SE rotor
+}
+
+// GATT / SkeletonKey — a key: ring bow + shaft + two teeth.
+static void draw_key_icon(lv_obj_t *tile) {
+    lv_color_t pur = lv_color_make(0xcc, 0x99, 0xff);
+    lv_obj_t *bow = icon_dot(tile, 34, pur, -14, 30);   // bow (ring)
+    lv_obj_set_style_bg_opa(bow, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_color(bow, pur, LV_PART_MAIN);
+    lv_obj_set_style_border_width(bow, 6, LV_PART_MAIN);
+    icon_rect(tile, 40, 8, 4, pur, 12, 44);             // shaft
+    icon_rect(tile, 8, 16, 2, pur, 26, 52);             // tooth 1
+    icon_rect(tile, 8, 12, 2, pur, 34, 52);             // tooth 2
+}
+
+// AirTag Replay — two stacked "loop" bars with arrow-ish ends (broadcast copy).
+static void draw_replay_icon(lv_obj_t *tile) {
+    lv_color_t org = lv_color_make(0xff, 0xaa, 0x00);
+    icon_rect(tile, 44, 10, 5, org, 6, 34);       // top bar
+    icon_dot(tile, 14, org, 30, 32);              // top arrow head
+    icon_rect(tile, 44, 10, 5, org, -6, 58);      // bottom bar
+    icon_dot(tile, 14, org, -30, 56);             // bottom arrow head
+}
+
+// Phantom Flood — a little ghost: round head + two eyes.
+static void draw_phantom_icon(lv_obj_t *tile) {
+    lv_color_t pk = lv_color_make(0xff, 0x66, 0xcc);
+    icon_rect(tile, 44, 52, 22, pk, 0, 30);       // rounded body (top rounded)
+    icon_dot(tile, 10, lv_color_black(), -9, 46);  // left eye
+    icon_dot(tile, 10, lv_color_black(),  9, 46);  // right eye
+}
+
+// RID Spoof — drone body + a broadcast dot above (fake Remote ID).
+static void draw_ridspoof_icon(lv_obj_t *tile) {
+    lv_color_t bl = lv_color_make(0x33, 0xcc, 0xff);
+    icon_dot(tile, 18, bl, 0, 52);                // body
+    icon_dot(tile, 14, bl, -28, 40);              // rotor L
+    icon_dot(tile, 14, bl,  28, 40);              // rotor R
+    icon_dot(tile, 10, lv_color_make(0xff,0x66,0x00), 0, 28);  // broadcast/spoof pip
+}
+
+// SubGHz Sentinel — a shield outline with an inner dot.
+static void draw_sentinel_icon(lv_obj_t *tile) {
+    lv_color_t gr = lv_color_make(0x00, 0xff, 0xaa);
+    lv_obj_t *sh = icon_rect(tile, 46, 54, 14, gr, 0, 30);  // shield body
+    lv_obj_set_style_bg_opa(sh, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_color(sh, gr, LV_PART_MAIN);
+    lv_obj_set_style_border_width(sh, 5, LV_PART_MAIN);
+    icon_dot(tile, 14, gr, 0, 50);                // core
 }
 
 // Skimmer detector icon — a credit card on its side with a thin magnetic
@@ -958,6 +971,77 @@ static void draw_aprs_icon(lv_obj_t *tile)
 // charge port: a rounded matte-black housing with the three connector
 // prongs visible inside. A small red dot off to the side stands in for
 // the port-status LED so the icon doesn't read as "generic outlet".
+static void draw_credit_icon(lv_obj_t *tile)
+{
+    // Gettone/moneta viola (tema Frantic Fest): cerchio pieno + anello interno.
+    lv_obj_t *coin = lv_obj_create(tile);
+    lv_obj_set_size(coin, 96, 96);
+    lv_obj_set_style_radius(coin, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(coin, lv_color_make(0x8A, 0x63, 0xD6), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(coin, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_color(coin, lv_color_make(0xB9, 0x9C, 0xF5), LV_PART_MAIN);
+    lv_obj_set_style_border_width(coin, 3, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(coin, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(coin, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(coin, LV_ALIGN_TOP_MID, 0, 34);
+
+    lv_obj_t *inner = lv_obj_create(coin);
+    lv_obj_set_size(inner, 58, 58);
+    lv_obj_set_style_radius(inner, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(inner, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_color(inner, lv_color_make(0x2A, 0x1B, 0x45), LV_PART_MAIN);
+    lv_obj_set_style_border_width(inner, 3, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(inner, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(inner, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_center(inner);
+}
+
+// Helper icone: rettangolo/cerchio pieno (filled) o solo bordo.
+static lv_obj_t *ic_shape(lv_obj_t *par, int w, int h, int radius, bool filled,
+                          lv_color_t col, lv_align_t al, int xo, int yo)
+{
+    lv_obj_t *o = lv_obj_create(par);
+    lv_obj_set_size(o, w, h);
+    lv_obj_set_style_radius(o, radius, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(o, 0, LV_PART_MAIN);
+    lv_obj_set_style_border_width(o, filled ? 0 : 4, LV_PART_MAIN);
+    if (filled) {
+        lv_obj_set_style_bg_color(o, col, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(o, LV_OPA_COVER, LV_PART_MAIN);
+    } else {
+        lv_obj_set_style_bg_opa(o, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_border_color(o, col, LV_PART_MAIN);
+    }
+    lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(o, al, xo, yo);
+    return o;
+}
+
+static void draw_adsb_icon(lv_obj_t *tile)  // aeroplano
+{
+    lv_color_t col = lv_color_make(0x37, 0x8A, 0xDD);
+    ic_shape(tile, 16, 92, 8, true, col, LV_ALIGN_TOP_MID, 0, 42);   // fusoliera
+    ic_shape(tile, 98, 16, 8, true, col, LV_ALIGN_TOP_MID, 0, 74);   // ali
+    ic_shape(tile, 44, 12, 6, true, col, LV_ALIGN_TOP_MID, 0, 120);  // coda
+}
+
+static void draw_mic_icon(lv_obj_t *tile)   // microfono
+{
+    lv_color_t col = lv_color_make(0xE0, 0x5A, 0x5A);
+    ic_shape(tile, 40, 66, 20, true, col, LV_ALIGN_TOP_MID, 0, 40);   // capsula
+    ic_shape(tile, 10, 24, 4,  true, col, LV_ALIGN_TOP_MID, 0, 110);  // stelo
+    ic_shape(tile, 56, 10, 5,  true, col, LV_ALIGN_TOP_MID, 0, 132);  // base
+}
+
+static void draw_panel_icon(lv_obj_t *tile) // finestra/dashboard
+{
+    lv_color_t col = lv_color_make(0x00, 0xCC, 0x66);
+    lv_obj_t *win = ic_shape(tile, 104, 84, 10, false, col, LV_ALIGN_TOP_MID, 0, 46);
+    ic_shape(win, 92, 20, 4, true, col, LV_ALIGN_TOP_MID,  0, 0);    // barra titolo
+    ic_shape(win, 66, 8,  4, true, col, LV_ALIGN_TOP_LEFT, 4, 30);   // riga
+    ic_shape(win, 44, 8,  4, true, col, LV_ALIGN_TOP_LEFT, 4, 46);   // riga
+}
+
 static void draw_tesla_cp_icon(lv_obj_t *tile)
 {
     // Outer port housing — matte black with subtle bezel.
@@ -1420,6 +1504,73 @@ static void draw_espnow_icon(lv_obj_t *tile)
     lv_obj_align(link, LV_ALIGN_TOP_MID, 0, cy + 13);
 }
 
+// Auto / find-my-car — folded map (green + blue/yellow roads) with a red pin,
+// drawn as cheap boxes. A full-colour ARGB8888 image here froze the menu on
+// scroll (the heavy blit tripped the task watchdog), so it's box-art like the
+// other tiles.
+static void draw_car_icon(lv_obj_t *tile)
+{
+    lv_obj_t *map = lv_obj_create(tile);
+    lv_obj_set_size(map, 108, 66);
+    lv_obj_set_style_radius(map, 10, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(map, lv_color_make(0x35, 0xA8, 0x53), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(map, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(map, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(map, 0, LV_PART_MAIN);
+    lv_obj_set_style_clip_corner(map, true, LV_PART_MAIN);
+    lv_obj_clear_flag(map, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(map, LV_ALIGN_CENTER, 0, 22);
+
+    lv_obj_t *blue = lv_obj_create(map);          // blue diagonal road (clipped to map)
+    lv_obj_set_size(blue, 160, 22);
+    lv_obj_set_style_radius(blue, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(blue, lv_color_make(0x1E, 0x88, 0xE5), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(blue, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(blue, 0, LV_PART_MAIN);
+    lv_obj_set_style_transform_rotation(blue, -300, LV_PART_MAIN);
+    lv_obj_clear_flag(blue, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(blue, LV_ALIGN_CENTER, -6, 12);
+
+    lv_obj_t *ylw = lv_obj_create(map);           // yellow diagonal road
+    lv_obj_set_size(ylw, 160, 9);
+    lv_obj_set_style_radius(ylw, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(ylw, lv_color_make(0xF4, 0xC2, 0x0D), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(ylw, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(ylw, 0, LV_PART_MAIN);
+    lv_obj_set_style_transform_rotation(ylw, 300, LV_PART_MAIN);
+    lv_obj_clear_flag(ylw, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(ylw, LV_ALIGN_CENTER, 6, -6);
+
+    lv_obj_t *tail = lv_obj_create(tile);         // pin point (rotated square, behind head)
+    lv_obj_set_size(tail, 16, 16);
+    lv_obj_set_style_radius(tail, 3, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(tail, lv_color_make(0xEA, 0x43, 0x35), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(tail, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(tail, 0, LV_PART_MAIN);
+    lv_obj_set_style_transform_rotation(tail, 450, LV_PART_MAIN);
+    lv_obj_clear_flag(tail, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(tail, LV_ALIGN_TOP_MID, 0, 44);
+
+    lv_obj_t *pin = lv_obj_create(tile);          // pin head (circle)
+    lv_obj_set_size(pin, 34, 34);
+    lv_obj_set_style_radius(pin, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(pin, lv_color_make(0xEA, 0x43, 0x35), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(pin, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(pin, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(pin, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(pin, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(pin, LV_ALIGN_TOP_MID, 0, 20);
+
+    lv_obj_t *hole = lv_obj_create(pin);          // white hole
+    lv_obj_set_size(hole, 14, 14);
+    lv_obj_set_style_radius(hole, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(hole, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(hole, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(hole, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(hole, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_center(hole);
+}
+
 void tools_screen_create()
 {
     tools_screen = lv_obj_create(NULL);
@@ -1466,6 +1617,7 @@ void tools_screen_create()
     // at the bottom of this grid; they moved to the TIME screen (swipe up
     // from the clock face).
     lv_obj_t *t_scanner = make_tile(grid, "Scanner");
+    t_duress            = make_tile(grid, "Duress");
     lv_obj_t *t_wifi    = make_tile(grid, "WiFi");
     lv_obj_t *t_analyze = make_tile(grid, "Analyze");
     lv_obj_t *t_mouse   = make_tile(grid, "Mouse");
@@ -1475,7 +1627,6 @@ void tools_screen_create()
     lv_obj_t *t_aprs    = make_tile(grid, "LoRa APRS");
     lv_obj_t *t_tesla   = make_tile(grid, "Tesla CP");
     t_airtag            = make_tile(grid, "AirTag");
-    t_flipper           = make_tile(grid, "Flipper");
     t_skimmer           = make_tile(grid, "Skimmers");
     t_eviltwin          = make_tile(grid, "Evil Twin");
     t_flock             = make_tile(grid, "Flock");
@@ -1483,13 +1634,29 @@ void tools_screen_create()
     lv_obj_t *t_meta    = make_tile(grid, "Meta");
     lv_obj_t *t_task    = make_tile(grid, "Task Mgr");
     lv_obj_t *t_pet     = make_tile(grid, "Pet");
-    t_duress            = make_tile(grid, "Duress");
     t_handshake         = make_tile(grid, "Pwn");
     lv_obj_t *t_cameras = make_tile(grid, "Cameras");
     lv_obj_t *t_deauth  = make_tile(grid, "Deauth");
+    lv_obj_t *t_arp     = make_tile(grid, "ARP MitM");
+    lv_obj_t *t_bleaudit = make_tile(grid, "BLE Audit");
+    lv_obj_t *t_drone   = make_tile(grid, "Drone ID");
+    lv_obj_t *t_gatt    = make_tile(grid, "GATT");
+    lv_obj_t *t_phantom = make_tile(grid, "Phantom");
+    lv_obj_t *t_rid     = make_tile(grid, "RID Spoof");
+    lv_obj_t *t_sentinel= make_tile(grid, "Sentinel");
+    lv_obj_t *t_printer = make_tile(grid, "Printer");
+    lv_obj_t *t_calmati = make_tile(grid, "Calmati");
+    lv_obj_t *t_download = make_tile(grid, "Download");
+    lv_obj_t *t_mifare  = make_tile(grid, "Mifare");
     lv_obj_t *t_waterfall = make_tile(grid, "Waterfall");
     lv_obj_t *t_espnow  = make_tile(grid, "ESP-NOW");
-    lv_obj_t *t_garage  = make_tile(grid, "Cancello");
+    lv_obj_t *t_car     = make_tile(grid, "Auto");
+    lv_obj_t *t_udda    = make_tile(grid, "UDDA");
+    lv_obj_t *t_adsb    = make_tile(grid, "ADS-B");
+    lv_obj_t *t_mic     = make_tile(grid, "Mic Rec");
+    lv_obj_t *t_assist  = make_tile(grid, "Assist");
+    lv_obj_t *t_panel   = make_tile(grid, "Panel");
+    lv_obj_t *t_credito = make_tile(grid, "Credito");
 
     draw_scanner_icon(t_scanner);
     draw_wifi_icon(t_wifi);
@@ -1501,21 +1668,37 @@ void tools_screen_create()
     draw_aprs_icon(t_aprs);
     draw_tesla_cp_icon(t_tesla);
     draw_airtag_icon(t_airtag);
-    draw_flipper_icon(t_flipper);
-    draw_skimmer_icon(t_skimmer);
+    place_icon(t_drone,    &ic_drone);
+    place_icon(t_gatt,     &ic_gatt);
+    place_icon(t_phantom,  &ic_phantom);
+    place_icon(t_rid,      &ic_rid);
+    place_icon(t_sentinel, &ic_sentinel);
+    place_icon(t_udda,     &ic_lora);      // swirl LoRa sulla tile UDDA
+    place_icon(t_skimmer,  &ic_skimmer);
+    place_icon(t_arp,      &ic_arp);
+    place_icon(t_bleaudit, &ic_bleaudit);
+    place_icon(t_mifare,   &ic_mifare);
+    place_icon(t_printer,  &ic_printer);
     draw_eviltwin_icon(t_eviltwin);
     draw_flock_icon(t_flock);
     draw_radar_icon(t_radar);
     draw_meta_icon(t_meta);
-    draw_taskmgr_icon(t_task);
+    place_icon(t_task, &ic_task);
     draw_pet_icon(t_pet);
-    draw_duress_icon(t_duress);
+    place_icon(t_duress, &ic_duress);
     draw_handshake_icon(t_handshake);
     draw_camera_scan_icon(t_cameras);
     draw_deauth_icon(t_deauth);
     draw_waterfall_icon(t_waterfall);
     draw_espnow_icon(t_espnow);
-    draw_garage_icon(t_garage);
+    draw_car_icon(t_car);
+    draw_credit_icon(t_credito);
+    draw_adsb_icon(t_adsb);
+    draw_mic_icon(t_mic);
+    draw_panel_icon(t_panel);
+
+    // Credito tile opens the Frantic Fest cashless-balance reader (NFC page 50).
+    lv_obj_add_event_cb(t_credito, [](lv_event_t *) { nfc_credit_screen_show(); }, LV_EVENT_CLICKED, NULL);
 
     // Tesla CP tile opens the 315 MHz charge-port-open transmit screen.
     lv_obj_add_event_cb(t_tesla, [](lv_event_t *) { tesla_cp_screen_show(); }, LV_EVENT_CLICKED, NULL);
@@ -1525,13 +1708,8 @@ void tools_screen_create()
     lv_obj_add_event_cb(t_airtag, on_airtag_clicked, LV_EVENT_CLICKED, NULL);
     set_airtag_tile_running(airtag_is_running());
 
-    // Flipper tile toggles the BLE Flipper Zero detector. Same dim-green
-    // running indication as AirTag.
-    lv_obj_add_event_cb(t_flipper, on_flipper_clicked, LV_EVENT_CLICKED, NULL);
-    set_flipper_tile_running(flipper_is_running());
-
     // Skimmers tile toggles the HC-0x card-skimmer detector. Same green-
-    // when-running affordance as AirTag and Flipper.
+    // when-running affordance as AirTag.
     lv_obj_add_event_cb(t_skimmer, on_skimmer_clicked, LV_EVENT_CLICKED, NULL);
     set_skimmer_tile_running(skimmer_is_running());
 
@@ -1544,6 +1722,31 @@ void tools_screen_create()
 
     // Radar tile opens the Threat Radar spatio-temporal correlation screen.
     lv_obj_add_event_cb(t_radar, [](lv_event_t *) { threat_radar_screen_show(); }, LV_EVENT_CLICKED, NULL);
+
+    // ADS-B tile opens the live flight radar (WiFi fetch from adsb.fi, GPS-centred).
+    lv_obj_add_event_cb(t_adsb, [](lv_event_t *) { adsb_screen_show(); }, LV_EVENT_CLICKED, NULL);
+
+    // Mic Rec tile opens the microphone recorder (streams a WAV to /Recordings).
+    lv_obj_add_event_cb(t_mic, [](lv_event_t *) { mic_screen_show(); }, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(t_assist, [](lv_event_t *) { voice_screen_show(); }, LV_EVENT_CLICKED, NULL);
+
+    // Panel tile opens the web control-panel screen (toggles the SoftAP).
+    lv_obj_add_event_cb(t_panel, [](lv_event_t *) { webpanel_screen_show(); }, LV_EVENT_CLICKED, NULL);
+
+    // Calmati tile: remote control of the T-Dongle-C5 "Calmati" AP over HTTP.
+    lv_obj_add_event_cb(t_calmati, [](lv_event_t *) { calmati_remote_screen_show(); }, LV_EVENT_CLICKED, NULL);
+    {
+        lv_obj_t *ic = lv_image_create(t_calmati);
+        lv_image_set_src(ic, &calmati_icon);
+        lv_obj_set_style_image_recolor(ic, lv_color_white(), LV_PART_MAIN);
+        lv_obj_set_style_image_recolor_opa(ic, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_align(ic, LV_ALIGN_TOP_MID, 0, 20);
+        lv_obj_clear_flag(ic, LV_OBJ_FLAG_CLICKABLE);
+    }
+
+    // Download tile: reboot straight into USB download mode for easy reflashing.
+    lv_obj_add_event_cb(t_download, [](lv_event_t *) { enter_download_mode(); }, LV_EVENT_CLICKED, NULL);
+
     lv_obj_add_event_cb(t_meta, [](lv_event_t *) { meta_screen_show(); }, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(t_task, [](lv_event_t *) { task_manager_show(); }, LV_EVENT_CLICKED, NULL);
 
@@ -1573,6 +1776,20 @@ void tools_screen_create()
     // APRS tile opens the LoRa APRS receive/transmit screen.
     lv_obj_add_event_cb(t_aprs, [](lv_event_t *) { aprs_screen_show(); }, LV_EVENT_CLICKED, NULL);
 
+    // Auto tile opens the find-my-car screen (save spot → arrow + distance).
+    lv_obj_add_event_cb(t_car, [](lv_event_t *) { car_screen_show(); }, LV_EVENT_CLICKED, NULL);
+    // Tile "UDDA Tracker": un tap accende GPS + mesh e si fa rilevare da UDDA.
+    lv_obj_add_event_cb(t_udda, [](lv_event_t *) {
+        gps_screen_power_on();                   // GPS on -> acquisisce il fix
+        // Accendi la radio LoRa con la STESSA sequenza della schermata LoRa
+        // (l'unica provata) + aggiorna l'indicatore a schermo. Prima duplicavo
+        // i passi qui e l'indicatore restava "off": ora chiamo la funzione vera.
+        lora_screen_force_on();
+        meshtastic_set_short_name("UDDA");       // nome corto riconoscibile
+        meshtastic_set_announce(true, 30000);    // annuncia ogni 30s -> rilevato prima
+        meshtastic_screen_show();                // mostra lo stato mesh come conferma
+    }, LV_EVENT_CLICKED, NULL);
+
     // WiFi tile opens the site-survey + ping-sweep screen.
     lv_obj_add_event_cb(t_scanner, [](lv_event_t *) { scan_screen_show(); }, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(t_wifi, [](lv_event_t *) { wifi_screen_show(); }, LV_EVENT_CLICKED, NULL);
@@ -1586,15 +1803,26 @@ void tools_screen_create()
     // Deauth tile opens the dedicated deauthentication transmitter.
     lv_obj_add_event_cb(t_deauth, [](lv_event_t *) { deauther_screen_show(); }, LV_EVENT_CLICKED, NULL);
 
+    // ARP MitM tile: join WiFi, map the /24, MitM one host or blackhole all.
+    lv_obj_add_event_cb(t_arp, [](lv_event_t *) { arp_mitm_screen_show(); }, LV_EVENT_CLICKED, NULL);
+
+    // BLE Audit tile: passive pairing/privacy auditor for nearby advertisers.
+    lv_obj_add_event_cb(t_bleaudit, [](lv_event_t *) { ble_pair_screen_show(); }, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(t_drone,  [](lv_event_t *) { drone_screen_show(); }, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(t_gatt,   [](lv_event_t *) { gatt_explorer_screen_show(); }, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(t_phantom,  [](lv_event_t *) { phantom_flood_screen_show(); }, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(t_rid,      [](lv_event_t *) { rid_spoof_screen_show(); }, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(t_sentinel, [](lv_event_t *) { subghz_sentinel_screen_show(); }, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(t_printer,  [](lv_event_t *) { printer_screen_show(); }, LV_EVENT_CLICKED, NULL);
+
+    // Mifare tile: ISO14443A card reader/identifier (UID/SAK/ATQA/type).
+    lv_obj_add_event_cb(t_mifare, [](lv_event_t *) { mifare_screen_show(); }, LV_EVENT_CLICKED, NULL);
+
     // Waterfall tile opens the FFT band analyzer (identical to the Marauder C5).
     lv_obj_add_event_cb(t_waterfall, [](lv_event_t *) { waterfall_screen_show(); }, LV_EVENT_CLICKED, NULL);
 
     // ESP-NOW tile opens the out-of-mesh device-to-device messaging screen.
     lv_obj_add_event_cb(t_espnow, [](lv_event_t *) { espnow_screen_show(); }, LV_EVENT_CLICKED, NULL);
-
-    // Cancello tile fires the garage/gate remote code once (433 MHz OOK), with
-    // an amber-flash + buzz so it's clear the transmit happened.
-    lv_obj_add_event_cb(t_garage, on_garage_clicked, LV_EVENT_CLICKED, NULL);
 
     // lv_obj_create() makes objects LV_OBJ_FLAG_CLICKABLE by default, so the
     // icon shapes filling each tile's centre would otherwise become the touch
@@ -1611,6 +1839,13 @@ void tools_screen_create()
 
 void tools_screen_show()
 {
+    // Re-sync the switch-tile colours: the Scanner (and others) can stop these
+    // detectors behind our back, so reflect the real running state on entry
+    // instead of leaving a stale green tile.
+    set_airtag_tile_running(airtag_is_running());
+    set_skimmer_tile_running(skimmer_is_running());
+    set_flock_tile_running(flock_is_running());
+
     main_loop_request_lvgl_priority(12);
     lv_scr_load(tools_screen);
 }

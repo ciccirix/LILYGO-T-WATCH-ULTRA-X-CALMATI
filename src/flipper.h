@@ -17,6 +17,14 @@ bool flipper_is_running();
 int  flipper_get_count();     // total Flipper Zero adverts accepted since start
 void flipper_reset_count();   // zero the count + dedup table (per-session reset)
 
+// PURE signature test — no dedup, no logging, no side effects. Returns true if
+// the advert is a Flipper (name prefix "Flipper " OR service UUID 0x3082), and
+// optionally copies the advertised name into name_out. The unified Scanner uses
+// this so its flagging doesn't depend on flipper_check's dedup state (a MAC seen
+// recently by the standalone detector would otherwise never get tagged).
+bool flipper_classify(const uint8_t *adv, int adv_len,
+                      char *name_out = nullptr, int name_out_sz = 0);
+
 // Inspect one BLE advertisement for a Flipper Zero. Returns true on a match
 // (and dedups against recent hits). Used by both the standalone scanner and
 // the wardriver — both call this from the BT task, so the dedup state needs

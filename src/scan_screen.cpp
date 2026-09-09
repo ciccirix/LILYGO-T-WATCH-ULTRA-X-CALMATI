@@ -297,13 +297,15 @@ void scan_screen_create()
     lv_obj_set_style_text_font(title, &lv_font_montserrat_28, LV_PART_MAIN);
     lv_obj_set_style_text_color(title, lv_color_make(0x33, 0xFF, 0x88), LV_PART_MAIN);
     lv_label_set_text(title, "SCANNER");
-    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 20, 22);
+    // Centred so the rounded top-left corner can't clip the "S" (was TOP_LEFT,20).
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 18);
 
     // Phase indicator (top-right): a coloured dot + "WiFi"/"BLE".
     s_phase_lbl = lv_label_create(s_screen);
     lv_obj_set_style_text_font(s_phase_lbl, &lv_font_montserrat_18, LV_PART_MAIN);
     lv_label_set_text(s_phase_lbl, "WiFi");
-    lv_obj_align(s_phase_lbl, LV_ALIGN_TOP_RIGHT, -20, 28);
+    // Pulled in from the rounded corner so "WiFi"/"BLE" isn't clipped (was -20).
+    lv_obj_align(s_phase_lbl, LV_ALIGN_TOP_RIGHT, -54, 28);
 
     s_phase_dot = lv_obj_create(s_screen);
     lv_obj_set_size(s_phase_dot, 14, 14);

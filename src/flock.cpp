@@ -238,9 +238,12 @@ static void flock_ble_cb(esp_ble_gap_cb_param_t *param)
 bool flock_start()
 {
     if (s_flock_running) return true;
+    // WiFi-only. Running WiFi-promiscuous + BLE scan together reliably crashes
+    // this S3 build (black screen + reboot) — same root cause fixed in Cameras
+    // OFF-AIR. Flock Safety / ALPR cameras are the primary target and are WiFi
+    // devices; BLE surveillance is covered by the AirTag/Meta tiles.
     bool wifi_ok = wifi_beacon_add(flock_beacon_cb);
-    bool ble_ok  = ble_scan_add(flock_ble_cb);
-    if (!wifi_ok && !ble_ok) return false;
+    if (!wifi_ok) return false;
     s_flock_running = true;
     return true;
 }

@@ -2,6 +2,7 @@
 #include "tools_screen.h"
 #include <LilyGoLib.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <lvgl.h>
 #include <stdio.h>
 
@@ -25,6 +26,7 @@
 #include "cam_audit.h"
 #include "pingsweep.h"
 #include "mouse_hid.h"
+#include "gps_screen.h"
 
 // ─── task table ──────────────────────────────────────────────────────────────
 static bool wifi_on()   { return WiFi.status() == WL_CONNECTED; }
@@ -36,6 +38,7 @@ struct Task { const char *name; bool (*running)(); void (*stop)(); };
 
 static const Task TASKS[] = {
     { "WiFi (STA)",       wifi_on,                 wifi_off },
+    { "GPS radio",        gps_screen_is_powered,   gps_screen_power_off },
     { "LoRa / Meshtastic",meshtastic_is_active,    mesh_off },
     { "ESP-NOW link",     esp_now_link_is_active,  espnow_off },
     { "Phone link (BLE)", phone_link_active,       phone_link_stop },
@@ -79,6 +82,47 @@ static void on_kill_all(lv_event_t *)
     for (int i = 0; i < NTASKS; i++)
         if (TASKS[i].running && TASKS[i].running() && TASKS[i].stop) TASKS[i].stop();
     refresh();
+}
+
+// Battery saver: stop every task, then hard-off the radios/rails that the
+// per-task stops don't fully cut (NFC rail left on by the reader screens,
+// WiFi controller, LoRa idle, GPS rail). BLE tears itself down once the last
+// consumer/holder is stopped above (refcount in ble_stack_release()).
+static void radios_off(lv_event_t *)
+{
+    for (int i = 0; i < NTASKS; i++)
+        if (TASKS[i].running && TASKS[i].running() && TASKS[i].stop) TASKS[i].stop();
+
+    WiFi.mode(WIFI_OFF);
+    esp_wifi_stop();                            // WiFi controller down
+    radio.standby();                            // SX1262 LoRa -> idle (recoverable)
+    instance.powerControl(POWER_NFC, false);    // NFC rail (DLDO1) off
+    instance.powerControl(POWER_GPS, false);    // GPS rail off
+
+    refresh();
+}
+
+static lv_obj_t *make_action_btn(lv_obj_t *parent, int xo, lv_color_t col,
+                                 const char *txt, lv_event_cb_t cb)
+{
+    lv_obj_t *b = lv_obj_create(parent);
+    lv_obj_set_size(b, 190, 46);
+    lv_obj_set_style_radius(b, 23, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(b, col, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(b, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(b, LV_ALIGN_BOTTOM_MID, xo, -14);
+    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *l = lv_label_create(b);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_color(l, lv_color_white(), LV_PART_MAIN);
+    lv_label_set_text(l, txt);
+    lv_obj_center(l);
+    lv_obj_add_flag(l, LV_OBJ_FLAG_EVENT_BUBBLE);
+    return b;
 }
 
 static void add_row(int idx)
@@ -153,13 +197,13 @@ void task_manager_create()
     lv_obj_set_style_text_font(title, &lv_font_montserrat_28, LV_PART_MAIN);
     lv_obj_set_style_text_color(title, lv_color_make(0xFF, 0x9A, 0x33), LV_PART_MAIN);
     lv_label_set_text(title, "TASK MANAGER");
-    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 20, 20);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 16);   // centred (was TOP_LEFT → clipped)
 
     s_batt = lv_label_create(s_screen);
     lv_obj_set_style_text_font(s_batt, &lv_font_montserrat_18, LV_PART_MAIN);
     lv_obj_set_style_text_color(s_batt, lv_color_make(0x00, 0xCC, 0x66), LV_PART_MAIN);
     lv_label_set_text(s_batt, "");
-    lv_obj_align(s_batt, LV_ALIGN_TOP_RIGHT, -18, 26);
+    lv_obj_align(s_batt, LV_ALIGN_TOP_MID, 0, 50);
 
     s_list = lv_obj_create(s_screen);
     lv_obj_set_size(s_list, 404, 340);
@@ -170,24 +214,14 @@ void task_manager_create()
     lv_obj_set_flex_flow(s_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(s_list, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_align(s_list, LV_ALIGN_TOP_MID, 0, 70);
+    lv_obj_align(s_list, LV_ALIGN_TOP_MID, 0, 84);
 
-    lv_obj_t *ka = lv_obj_create(s_screen);
-    lv_obj_set_size(ka, 200, 44);
-    lv_obj_set_style_radius(ka, 22, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(ka, lv_color_make(0x88, 0x22, 0x22), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(ka, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_width(ka, 0, LV_PART_MAIN);
-    lv_obj_clear_flag(ka, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(ka, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_align(ka, LV_ALIGN_BOTTOM_MID, 0, -16);
-    lv_obj_add_event_cb(ka, on_kill_all, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *kal = lv_label_create(ka);
-    lv_obj_set_style_text_font(kal, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_set_style_text_color(kal, lv_color_white(), LV_PART_MAIN);
-    lv_label_set_text(kal, LV_SYMBOL_POWER "  STOP ALL");
-    lv_obj_center(kal);
-    lv_obj_add_flag(kal, LV_OBJ_FLAG_EVENT_BUBBLE);
+    // Due azioni in fondo: STOP ALL (ferma i task) e RADIO OFF (taglia le radio
+    // + rail per la batteria).
+    make_action_btn(s_screen, -100, lv_color_make(0x88, 0x22, 0x22),
+                    LV_SYMBOL_POWER "  STOP ALL", on_kill_all);
+    make_action_btn(s_screen, +100, lv_color_make(0x1D, 0x7A, 0x50),
+                    LV_SYMBOL_BATTERY_FULL "  RADIO OFF", radios_off);
 
     s_timer = lv_timer_create(on_timer, 800, NULL);
 }

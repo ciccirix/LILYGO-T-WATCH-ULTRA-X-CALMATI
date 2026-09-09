@@ -26,6 +26,8 @@ static bool starts_with_ci(const char *s, const char *key)
 
 bool wifi_creds_seed_from_sd()
 {
+    // Rete di default (casa): /wifi.txt. L'hotspot UDDA lo gestisce la tile
+    // Assist da sola (vedi voice_screen), non serve toccare i file.
     if (!SD.exists("/wifi.txt")) return false;
     File f = SD.open("/wifi.txt", FILE_READ);
     if (!f) return false;

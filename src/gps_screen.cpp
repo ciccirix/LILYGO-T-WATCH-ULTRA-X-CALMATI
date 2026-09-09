@@ -124,6 +124,36 @@ static void on_toggle(lv_event_t *e)
     update_status();
 }
 
+// Power GPS on from elsewhere (e.g. the Auto tile) without the user hunting for
+// the switch. Mirrors on_toggle's enable branch and syncs the switch widget so
+// the GPS screen shows the real state. No-op if already powered.
+void gps_screen_power_on()
+{
+    if (gps_powered) return;
+    gps_powered = true;
+    Serial1.end();
+    instance.powerControl(POWER_GPS, true);
+    clock_screen_set_gps_active(true);
+    if (toggle_sw) {
+        lv_obj_add_state(toggle_sw, LV_STATE_CHECKED);
+        update_status();
+    }
+}
+
+void gps_screen_power_off()
+{
+    if (!gps_powered) return;
+    gps_powered = false;
+    instance.powerControl(POWER_GPS, false);
+    Serial1.end();
+    clock_screen_set_gps_active(false);
+    rtc_synced = false;
+    if (toggle_sw) {
+        lv_obj_clear_state(toggle_sw, LV_STATE_CHECKED);
+        update_status();
+    }
+}
+
 // Creates one key/value row in the scrollable data panel.
 // The value label pointer is written to *val_out for later updates.
 static void make_data_row(lv_obj_t *parent, const char *field, lv_obj_t **val_out)

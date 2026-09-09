@@ -19,11 +19,56 @@ void clock_screen_get_local_time(struct tm *out);
 // the classic HC-0x, the BLE serial modules (HM-10/AT-09/HC-08/JDY/MLT-BT05…) that a
 // BLE scan can actually see — many modern skimmers use these because they are cheaper.
 static const char *HC_PREFIXES[] = {
-    "HC-03", "HC-05", "HC-06", "HC-08", "HM-1", "HMSoft", "CC41",
-    "AT-09", "BT05", "BT-05", "MLT-BT05", "JDY-", "SPP-CA", "Linvor"
+    "HC-03", "HC-04", "HC-05", "HC-06", "HC-07", "HC-08", "HC-42",
+    "HM-1", "HMSoft", "SH-HC", "CC41", "BLE-CC41",
+    "AT-09", "AT-05", "AT-19",
+    "BT05", "BT-05", "MLT-BT05", "BT-HC", "FBT06", "FBT-06",
+    "JDY-", "SPP-C", "Linvor", "ZS-040",
+    "TB-04", "RF-BM", "DX-BT", "KCX", "FSC-BT", "AC690", "DSD TECH", "Bolutek"
 };
 #define HC_PREFIX_COUNT  (int)(sizeof(HC_PREFIXES) / sizeof(HC_PREFIXES[0]))
 #define SKIMMER_NAME_MAX 33
+
+// Shared detection: does this advertisement look like a BT/BLE serial module?
+// (1) name prefix (AD 0x08/0x09) against HC_PREFIXES, or (2) advertised serial
+// service UUID 0xFFE0 / 0xFFF0 (AD 0x02/0x03) → catches renamed modules.
+// name_out gets the advertised name (or "" if only the service matched).
+bool skimmer_ad_match(const uint8_t *adv, int adv_len, char *name_out, int name_sz)
+{
+    if (name_out && name_sz) name_out[0] = '\0';
+    bool matched = false;
+    for (int pos = 0; pos + 1 < adv_len; ) {
+        uint8_t seg_len = adv[pos];
+        if (seg_len == 0 || pos + 1 + (int)seg_len > adv_len) break;
+        uint8_t        ad_type     = adv[pos + 1];
+        const uint8_t *ad_data     = adv + pos + 2;
+        int            ad_data_len = (int)seg_len - 1;
+
+        if (ad_type == 0x08 || ad_type == 0x09) {               // name
+            for (int i = 0; i < HC_PREFIX_COUNT; i++) {
+                int pl = (int)strlen(HC_PREFIXES[i]);
+                if (ad_data_len >= pl && memcmp(ad_data, HC_PREFIXES[i], pl) == 0) {
+                    matched = true; break;
+                }
+            }
+            if (name_out && name_sz && ad_data_len > 0 && name_out[0] == '\0') {
+                int n = ad_data_len < name_sz - 1 ? ad_data_len : name_sz - 1;
+                for (int j = 0; j < n; j++) {
+                    uint8_t c = ad_data[j];
+                    name_out[j] = (c >= 0x20 && c < 0x7f) ? (char)c : '.';
+                }
+                name_out[n] = '\0';
+            }
+        } else if (ad_type == 0x02 || ad_type == 0x03) {        // 16-bit svc UUIDs
+            for (int j = 0; j + 1 < ad_data_len; j += 2) {
+                uint16_t u = (uint16_t)ad_data[j] | ((uint16_t)ad_data[j + 1] << 8);
+                if (u == 0xFFE0 || u == 0xFFF0) { matched = true; break; }
+            }
+        }
+        pos += 1 + (int)seg_len;
+    }
+    return matched;
+}
 
 // Detection enqueued by the BT callback; drained by skimmer_bg_tick() on the
 // main task so the SD I/O doesn't run inside the BT controller's context.
@@ -75,47 +120,24 @@ static bool seen_recently_or_mark(const uint8_t *mac)
 bool skimmer_check(const uint8_t *mac6, int8_t rssi, uint8_t addr_type,
                    const uint8_t *adv, int adv_len)
 {
-    for (int pos = 0; pos < adv_len; ) {
-        uint8_t seg_len = adv[pos];
-        if (seg_len == 0) break;
-        if (pos + 1 + (int)seg_len > adv_len) break;
-        uint8_t        ad_type     = adv[pos + 1];
-        const uint8_t *ad_data     = adv + pos + 2;
-        int            ad_data_len = (int)seg_len - 1;
+    char name[SKIMMER_NAME_MAX];
+    if (!skimmer_ad_match(adv, adv_len, name, sizeof(name))) return false;
+    if (seen_recently_or_mark(mac6)) return false;
 
-        if (ad_type == 0x08 || ad_type == 0x09) {
+    if (!s_queue) s_queue = xQueueCreate(8, sizeof(SkimmerHit));
 
-            bool matched = false;
-            for (int i = 0; i < HC_PREFIX_COUNT; i++) {
-                int pl = (int)strlen(HC_PREFIXES[i]);
-                if (ad_data_len >= pl && memcmp(ad_data, HC_PREFIXES[i], pl) == 0) {
-                    matched = true;
-                    break;
-                }
-            }
-            if (!matched) { pos += 1 + (int)seg_len; continue; }
+    SkimmerHit hit = {};
+    memcpy(hit.mac, mac6, 6);
+    hit.rssi      = rssi;
+    hit.addr_type = addr_type;
+    // name is "" for a service-only (0xFFE0/0xFFF0) match on a renamed module.
+    strncpy(hit.name, name[0] ? name : "(serial-BLE)", sizeof(hit.name) - 1);
+    hit.name[sizeof(hit.name) - 1] = '\0';
 
-            if (seen_recently_or_mark(mac6)) return false;
-
-            if (!s_queue) s_queue = xQueueCreate(8, sizeof(SkimmerHit));
-
-            SkimmerHit hit = {};
-            memcpy(hit.mac, mac6, 6);
-            hit.rssi      = rssi;
-            hit.addr_type = addr_type;
-            int name_len = ad_data_len < (int)(sizeof(hit.name) - 1)
-                             ? ad_data_len : (int)(sizeof(hit.name) - 1);
-            memcpy(hit.name, ad_data, name_len);
-            hit.name[name_len] = '\0';
-
-            if (s_queue) xQueueSend(s_queue, &hit, 0);
-            threatradar_observe(mac6, rssi, TR_CAT_SKIMMER);
-            s_count++;
-            return true;
-        }
-        pos += 1 + (int)seg_len;
-    }
-    return false;
+    if (s_queue) xQueueSend(s_queue, &hit, 0);
+    threatradar_observe(mac6, rssi, TR_CAT_SKIMMER);
+    s_count++;
+    return true;
 }
 
 // BLE scan-result consumer for the standalone Skimmers tile.

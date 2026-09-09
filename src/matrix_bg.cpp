@@ -14,56 +14,21 @@ static bool       mx_enabled = false;
 
 static int  head[MX_COLS];          // current head row; negative = still entering
 static int  tlen[MX_COLS];          // trail length
-static char cell[MX_COLS][MX_ROWS]; // stable glyphs so the trail doesn't fully reshuffle
-// Easter-egg state per column. 0 = no egg (regular rain). >0 = chars
-// [0..egg_len-1] of cell[c][] hold a fixed string; mx_tick skips its
-// head-randomize and trail-flicker for those cells so the word stays
-// readable as the bright head passes through it.
-static int  egg_len[MX_COLS];
+static char cell[MX_COLS][MX_ROWS]; // glyphs for this column (tiled MX_WORD)
 
-// No '#' — it is the LVGL recolor escape character and would corrupt parsing.
-static const char MX_CHARSET[] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@$%&*+=<>?";
-static const int MX_CHARSET_LEN = sizeof(MX_CHARSET) - 1;
-
-// Easter-egg strings. All chars must live in MX_CHARSET (no '#' or
-// lowercase). Roughly 1-in-30 column resets seeds the column's top
-// cells with one of these.
-static const char *MX_EGGS[] = {
-    "HACKEDEXISTENCE",
-    "R3DFISH",
-    "DZAZ ",
-    "1337",
-    "HACKTHEPLANET",
-};
-static const int MX_EGG_COUNT = sizeof(MX_EGGS) / sizeof(MX_EGGS[0]);
-
-static char rnd_char() { return MX_CHARSET[esp_random() % MX_CHARSET_LEN]; }
+// Every column rains this word, tiled top-to-bottom, instead of random
+// glyphs. No '#' — it is the LVGL recolor escape character and would
+// corrupt parsing.
+static const char MX_WORD[] = "CALMATI";
+static const int  MX_WORD_LEN = sizeof(MX_WORD) - 1;
 
 static void col_reset(int c)
 {
-    tlen[c] = 6 + (int)(esp_random() % 13);          // 6..18
-    head[c] = -(int)(esp_random() % MX_ROWS);        // stagger entry from above
+    tlen[c] = MX_ROWS;
+    head[c] = -(int)(esp_random() % MX_ROWS);   // stagger entry from above
+    int offset = c % MX_WORD_LEN;               // stagger the word per column
     for (int r = 0; r < MX_ROWS; r++)
-        cell[c][r] = MX_CHARSET[esp_random() % MX_CHARSET_LEN];
-    egg_len[c] = 0;
-    // ~1 in 30 reset chances, repaint the whole column with one of the
-    // easter-egg strings tiled top-to-bottom. egg_len = MX_ROWS so
-    // mx_tick's randomize + flicker skip every cell, leaving the
-    // repeated text frozen while the head's bright gradient slides
-    // down through it. Bump tlen to MX_ROWS so the trail covers the
-    // full column when the head reaches the bottom.
-    if ((esp_random() % 30) == 0) {
-        const char *s = MX_EGGS[esp_random() % MX_EGG_COUNT];
-        int slen = 0;
-        while (s[slen]) slen++;
-        if (slen > 0) {
-            for (int r = 0; r < MX_ROWS; r++)
-                cell[c][r] = s[r % slen];
-            egg_len[c] = MX_ROWS;
-            tlen[c]    = MX_ROWS;
-        }
-    }
+        cell[c][r] = MX_WORD[(r + offset) % MX_WORD_LEN];
 }
 
 // Distance 0 = bright head, increasing distance = dimmer trail.
@@ -97,15 +62,6 @@ static void mx_tick(lv_timer_t *)
 {
     for (int c = 0; c < MX_COLS; c++) {
         head[c]++;
-        int el = egg_len[c];
-        // Skip randomization for cells that hold easter-egg chars
-        // (rows [0..el-1]); randomize freely outside that range.
-        if (head[c] >= el && head[c] < MX_ROWS)
-            cell[c][head[c]] = rnd_char();          // fresh glyph at the head
-        if ((esp_random() & 0x0F) == 0) {           // occasional trail flicker
-            int r = (int)(esp_random() % MX_ROWS);
-            if (r >= el) cell[c][r] = rnd_char();
-        }
         if (head[c] - tlen[c] > MX_ROWS)
             col_reset(c);
         render_col(c);
