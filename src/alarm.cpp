@@ -5,7 +5,8 @@
 #include <time.h>
 #include <stdio.h>
 #include <math.h>
-#include <driver/i2s.h>
+// LilyGoLib on arduino-esp32 3.x exposes the I2S player as ESP_I2S's
+// I2SClass, whose reconfigure API is used below in chime_task().
 
 // Defined in main.cpp — current displayed local time (RTC + UTC offset).
 void clock_screen_get_local_time(struct tm *out);
@@ -251,7 +252,11 @@ static void chime_task(void *)
 {
     instance.powerControl(POWER_SPEAK, true);
     vTaskDelay(pdMS_TO_TICKS(20));   // let the amp settle
-    i2s_set_clk(I2S_NUM_1, CHIME_SAMPLE_RATE, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_MONO);
+    // Reconfigure the I2S TX to our 16 kHz mono chime rate. LilyGoLib brings
+    // the player up in stereo/44.1 kHz by default; we drop it to 16k mono for
+    // the doorbell tone. This is the new-API replacement for the legacy
+    // i2s_set_clk() the earlier IDF 5.1 build used.
+    instance.player.configureTX(CHIME_SAMPLE_RATE, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO);
 
     int16_t chunk[CHIME_CHUNK_SAMPLES];
     float   phase = 0.0f;
