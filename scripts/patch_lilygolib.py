@@ -49,3 +49,32 @@ def set_define(path, name, value):
 
 for fname, name, value in PATCHES:
     set_define(os.path.join(src_dir, fname), name, value)
+
+
+# --- One-off include strip -----------------------------------------------
+#
+# `bsp_codec/esp_codec.cpp` includes both the modern I2S headers
+# (`driver/i2s_std.h`, `i2s_pdm.h`, `i2s_tdm.h`) AND the legacy
+# `driver/i2s.h`. On arduino-esp32 3.3.11 (pioarduino), `ESP_I2S.h` from the
+# Arduino ESP32 core defines `i2s_mode_t`, and so does the legacy
+# `i2s_types_legacy.h` pulled in by `driver/i2s.h` — resulting in
+# `conflicting declaration 'typedef enum i2s_mode_t i2s_mode_t'`. The legacy
+# include is not needed (the file already uses the new API), so strip it.
+def strip_include(path, needle):
+    if not os.path.isfile(path):
+        print("[patch_lilygolib] WARNING: %s not found; include NOT stripped" % path)
+        return
+    with open(path, "r", encoding="utf-8") as f:
+        src = f.read()
+    pat = re.compile(r"^[ \t]*#include\s+[\"<]" + re.escape(needle) + r"[\">][^\n]*\n",
+                     re.MULTILINE)
+    new_src, n = pat.subn("", src)
+    if n == 0:
+        print("[patch_lilygolib] include \"%s\" already absent in %s" % (needle, os.path.basename(path)))
+        return
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(new_src)
+    print("[patch_lilygolib] stripped %d include of \"%s\" from %s" % (n, needle, os.path.basename(path)))
+
+
+strip_include(os.path.join(src_dir, "bsp_codec", "esp_codec.cpp"), "driver/i2s.h")
