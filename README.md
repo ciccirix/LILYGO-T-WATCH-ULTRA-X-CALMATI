@@ -14,13 +14,33 @@
 | :---: | :---: | :---: |
 | <img src="img/threat_radar.png" width="240" alt="Threat Radar"> | <img src="img/pwnpet.png" width="240" alt="pwnpet"> | <img src="img/pwnpet_loop.gif" width="240" alt="pwnpet swimming"> |
 
-| Clock | Wardriver | Tools | WiFi | Bluetooth |
-| :---: | :---: | :---: | :---: | :---: |
-| ![Clock](img/Clock.bmp) | ![Wardriver](img/Wardriver.bmp) | ![Tools](img/Tools1.bmp) | ![WiFi](img/WiFi_Radio.bmp) | ![Bluetooth](img/Bluetooth_Radio.bmp) |
+**Watch face & system**
 
-| LoRa | GPS | NFC | Meshtastic Map | Meshtastic Nodes |
+| Clock | Time | Settings | Settings |
+| :---: | :---: | :---: | :---: |
+| ![Clock](img/Clock.bmp) | ![Time](img/Time.bmp) | ![Settings](img/Settings1.bmp) | ![Settings](img/Settings2.bmp) |
+
+**Radios**
+
+| WiFi | Bluetooth | LoRa | GPS | NFC |
 | :---: | :---: | :---: | :---: | :---: |
-| ![LoRa](img/LORA_Radio.bmp) | ![GPS](img/GPS_Radio.bmp) | ![NFC](img/NFC_Radio.bmp) | ![Map](img/Meshtastic_Map.bmp) | ![Nodes](img/Meshtastic_Nodes.bmp) |
+| ![WiFi](img/WiFi_Radio.bmp) | ![Bluetooth](img/Bluetooth_Radio.bmp) | ![LoRa](img/LORA_Radio.bmp) | ![GPS](img/GPS_Radio.bmp) | ![NFC](img/NFC_Radio.bmp) |
+
+**Tools grid**
+
+| Tools | Tools | Tools | Tools |
+| :---: | :---: | :---: | :---: |
+| ![Tools](img/Tools1.bmp) | ![Tools](img/Tools2.bmp) | ![Tools](img/Tools3.bmp) | ![Tools](img/Tools4.bmp) |
+
+**Meshtastic & wardriving**
+
+| Messages | Nodes | Send | Map |
+| :---: | :---: | :---: | :---: |
+| ![Messages](img/Meshtastic_Messages.bmp) | ![Nodes](img/Meshtastic_Nodes.bmp) | ![Send](img/Meshtastic_Send.bmp) | ![Map](img/Meshtastic_Map.bmp) |
+
+| Configuration | Configuration | Wardriver |
+| :---: | :---: | :---: |
+| ![Configuration](img/Meshtastic_configuration1.bmp) | ![Configuration](img/Meshtastic_Configuration2.bmp) | ![Wardriver](img/Wardriver.bmp) |
 
 ---
 
