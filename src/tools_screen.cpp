@@ -52,6 +52,7 @@ extern "C" const lv_image_dsc_t calmati_icon;
 #include "mifare_screen.h"
 #include "badusb_screen.h"
 #include "waterfall_screen.h"
+#include "wpa3_sae_screen.h"
 #include "espnow_screen.h"
 #include "nfc_credit_screen.h"
 #include <LilyGoLib.h>
@@ -1657,6 +1658,10 @@ void tools_screen_create()
     lv_obj_t *t_assist  = make_tile(grid, "Assist");
     lv_obj_t *t_panel   = make_tile(grid, "Panel");
     lv_obj_t *t_credito = make_tile(grid, "Credito");
+    // WPA3 SAE Overflow — flood a WPA3-SAE AP with random SAE Commit frames
+    // to DoS its authentication path. Injection reuses the same primitive as
+    // the deauther; PMF (mandatory on WPA3) doesn't protect against this.
+    lv_obj_t *t_sae     = make_tile(grid, "WPA3 SAE");
 
     draw_scanner_icon(t_scanner);
     draw_wifi_icon(t_wifi);
@@ -1805,6 +1810,10 @@ void tools_screen_create()
 
     // ARP MitM tile: join WiFi, map the /24, MitM one host or blackhole all.
     lv_obj_add_event_cb(t_arp, [](lv_event_t *) { arp_mitm_screen_show(); }, LV_EVENT_CLICKED, NULL);
+
+    // WPA3 SAE tile: scan → filter WPA3-SAE APs → flood the target with random
+    // SAE Commit frames (mbedTLS P-256, per-frame spoofed source MAC).
+    lv_obj_add_event_cb(t_sae, [](lv_event_t *) { wpa3_sae_screen_show(); }, LV_EVENT_CLICKED, NULL);
 
     // BLE Audit tile: passive pairing/privacy auditor for nearby advertisers.
     lv_obj_add_event_cb(t_bleaudit, [](lv_event_t *) { ble_pair_screen_show(); }, LV_EVENT_CLICKED, NULL);

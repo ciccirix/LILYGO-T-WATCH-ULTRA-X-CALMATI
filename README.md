@@ -98,4 +98,8 @@
 
 Fork of **[r3dfish/13-37](https://github.com/r3dfish/13-37)** — MIT. See [LICENSE](LICENSE) and third-party notices in-tree.
 
+Technique ports (MIT):
+- **[C5Lab/projectZero](https://github.com/C5Lab/projectZero)** — WPA3 SAE Overflow attack (mbedTLS P-256 SAE Commit flood with per-frame spoofed MAC) and the D-UCB channel-selection bandit used by the wardriver.
+- **[nfc-tools/mfcuk](https://github.com/nfc-tools/mfcuk)** — reader-side Crypto-1 (`crapto1`) used by the Mifare dictionary attack (GPLv2, vendored in `src/crapto1.{c,h}`).
+
 **Responsible use:** the RF / WiFi / BLE tools are for education and authorized security testing on hardware and networks you own or have permission to test. You are responsible for complying with local regulations.

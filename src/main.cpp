@@ -37,6 +37,7 @@
 #include "mifare_screen.h"
 #include "badusb_screen.h"
 #include "waterfall_screen.h"
+#include "wpa3_sae_screen.h"
 #include "espnow_screen.h"
 #include "esp_now_link.h"
 #include "onboarding.h"
@@ -1722,6 +1723,7 @@ void setup()
     mifare_screen_create();
     badusb_screen_create();
     waterfall_screen_create();
+    wpa3_sae_screen_create();
     onboarding_screen_create();
     stopwatch_screen_create();
     timer_screen_create();
@@ -1904,6 +1906,10 @@ void loop()
             } else if (deauther_screen_is_active()) {
                 // Halt any in-progress deauth flood and tear the radio back down.
                 deauther_screen_stop();
+                tools_screen_show();
+            } else if (wpa3_sae_screen_is_active()) {
+                // Stop the SAE Commit flood + free the mbedTLS state.
+                wpa3_sae_screen_stop();
                 tools_screen_show();
             } else if (arp_mitm_screen_is_active()) {
                 // Stop any poison loop, heal the ARP caches, restore the radio.

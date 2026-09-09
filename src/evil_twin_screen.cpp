@@ -1,5 +1,6 @@
 #include "evil_twin_screen.h"
 #include "evil_portal.h"
+#include "evil_twin_verify.h"
 #include "tools_screen.h"
 #include <LilyGoLib.h>
 #include <WiFi.h>
@@ -27,6 +28,7 @@ static lv_obj_t *list_box;          // AP list (idle/list states)
 static lv_obj_t *live_box;          // live capture panel (running state)
 static lv_obj_t *live_ssid, *live_sub, *live_list;
 static int       s_creds_shown = -1;   // rebuild the list only on a new capture
+static uint32_t  s_verify_sig  = 0;    // fingerprint of verify statuses; triggers a rebuild when any capture's verdict changes
 static lv_obj_t *btn_scan, *btn_scan_lbl;
 static lv_obj_t *btn_atk,  *btn_atk_lbl;
 
@@ -95,6 +97,7 @@ static void build_live_box()
 {
     lv_obj_clean(live_box);
     s_creds_shown = -1;
+    s_verify_sig  = 0xFFFFFFFF;   // force the first refresh to build the list
 
     live_ssid = lv_label_create(live_box);
     lv_obj_set_style_text_font(live_ssid, &lv_font_montserrat_20, LV_PART_MAIN);
@@ -141,16 +144,27 @@ static void rebuild_cred_list()
         return;
     }
     for (int i = 0; i < n; i++) {
+        EvilVerifyStatus vs = evil_verify_status(creds[i].cred_id);
+
+        // Card border reflects the verify verdict: bright green = confirmed
+        // real password, red = the AP rejected it, amber = still checking,
+        // neutral = we don't know (no BSSID, or the AP was out of earshot).
+        lv_color_t border;
+        switch (vs) {
+        case EV_VERIFY_OK:      border = lv_color_make(0x22, 0xDD, 0x66); break;
+        case EV_VERIFY_WRONG:   border = lv_color_make(0xDD, 0x33, 0x33); break;
+        case EV_VERIFY_TESTING: border = lv_color_make(0xFF, 0xCC, 0x00); break;
+        case EV_VERIFY_PENDING: border = lv_color_make(0xFF, 0xCC, 0x00); break;
+        default:                border = lv_color_make(0x66, 0x66, 0x66); break;
+        }
+
         lv_obj_t *card = lv_obj_create(live_list);
         lv_obj_set_width(card, lv_pct(100));
         lv_obj_set_height(card, LV_SIZE_CONTENT);
         lv_obj_set_style_bg_color(card, lv_color_make(0x12, 0x10, 0x12), LV_PART_MAIN);
         lv_obj_set_style_bg_opa(card, LV_OPA_COVER, LV_PART_MAIN);
-        // Newest capture gets the bright border.
-        lv_obj_set_style_border_color(card,
-            i == 0 ? lv_color_make(0x22, 0xDD, 0x66) : lv_color_make(0x33, 0x22, 0x33),
-            LV_PART_MAIN);
-        lv_obj_set_style_border_width(card, i == 0 ? 2 : 1, LV_PART_MAIN);
+        lv_obj_set_style_border_color(card, border, LV_PART_MAIN);
+        lv_obj_set_style_border_width(card, i == 0 ? 3 : 2, LV_PART_MAIN);
         lv_obj_set_style_radius(card, 8, LV_PART_MAIN);
         lv_obj_set_style_pad_all(card, 8, LV_PART_MAIN);
         lv_obj_set_style_pad_row(card, 2, LV_PART_MAIN);
@@ -158,13 +172,35 @@ static void rebuild_cred_list()
         lv_obj_set_layout(card, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
 
-        // The captured secret — the loot, in bright green mono-ish.
+        // The captured secret — colour tracks the verdict: green if verified,
+        // red if the AP said no, dim if we can't tell yet.
+        lv_color_t sec_col;
+        switch (vs) {
+        case EV_VERIFY_OK:      sec_col = lv_color_make(0x33, 0xFF, 0x88); break;
+        case EV_VERIFY_WRONG:   sec_col = lv_color_make(0xFF, 0x66, 0x66); break;
+        default:                sec_col = lv_color_make(0xCC, 0xCC, 0xCC); break;
+        }
         lv_obj_t *sec = lv_label_create(card);
         lv_obj_set_style_text_font(sec, &lv_font_montserrat_20, LV_PART_MAIN);
-        lv_obj_set_style_text_color(sec, lv_color_make(0x33, 0xFF, 0x88), LV_PART_MAIN);
+        lv_obj_set_style_text_color(sec, sec_col, LV_PART_MAIN);
         lv_label_set_long_mode(sec, LV_LABEL_LONG_DOT);
         lv_obj_set_width(sec, 350);
         lv_label_set_text(sec, creds[i].secret[0] ? creds[i].secret : "(vuota)");
+
+        // Verify verdict tag under the secret — a plain-language read on
+        // whether we've round-tripped the real AP with this password yet.
+        const char *tag;
+        switch (vs) {
+        case EV_VERIFY_OK:      tag = LV_SYMBOL_OK      " VERIFICATA"; break;
+        case EV_VERIFY_WRONG:   tag = LV_SYMBOL_CLOSE   " SBAGLIATA";  break;
+        case EV_VERIFY_TESTING: tag = LV_SYMBOL_REFRESH " verifico..."; break;
+        case EV_VERIFY_PENDING: tag = LV_SYMBOL_REFRESH " in coda";    break;
+        default:                tag = "AP fuori portata";              break;
+        }
+        lv_obj_t *verdict = lv_label_create(card);
+        lv_obj_set_style_text_font(verdict, &lv_font_montserrat_14, LV_PART_MAIN);
+        lv_obj_set_style_text_color(verdict, border, LV_PART_MAIN);
+        lv_label_set_text(verdict, tag);
 
         lv_obj_t *meta = lv_label_create(card);
         lv_obj_set_style_text_font(meta, &lv_font_montserrat_14, LV_PART_MAIN);
@@ -179,8 +215,22 @@ static void refresh_live()
     lv_label_set_text_fmt(live_sub, LV_SYMBOL_WIFI " %d client   ·   %d credenziali",
                           evil_portal_client_count(), evil_portal_cred_count());
     int c = evil_portal_cred_count();
-    if (c != s_creds_shown) {     // only rebuild the list when a new one lands
+
+    // Rebuild when the number of captures changes OR when any verdict flips
+    // (verifico → OK / SBAGLIATA / timeout). We fingerprint the statuses of
+    // the most recent captures into a single 32-bit hash — 2 bits per row is
+    // enough for the 5 verify states, and 16 rows is what we render anyway.
+    EvilCred latest[16];
+    int n = evil_portal_get_creds(latest, 16);
+    uint32_t sig = 0;
+    for (int i = 0; i < n && i < 16; i++) {
+        uint32_t v = (uint32_t)evil_verify_status(latest[i].cred_id) & 0x3;
+        sig |= v << (i * 2);
+    }
+
+    if (c != s_creds_shown || sig != s_verify_sig) {
         s_creds_shown = c;
+        s_verify_sig  = sig;
         rebuild_cred_list();
     }
 }
@@ -287,7 +337,9 @@ static void on_attack_btn(lv_event_t *)
         evil_portal_stop();
         s_state = (s_ap_count > 0) ? EST_LIST : EST_IDLE;
     } else if (s_target >= 0) {
-        if (evil_portal_start(s_aps[s_target].ssid, s_aps[s_target].channel)) {
+        if (evil_portal_start(s_aps[s_target].ssid,
+                              s_aps[s_target].bssid,
+                              s_aps[s_target].channel)) {
             build_live_box();
             refresh_live();
             s_state = EST_RUNNING;

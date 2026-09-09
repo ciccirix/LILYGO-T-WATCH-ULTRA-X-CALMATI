@@ -1,6 +1,7 @@
 #include "wifi_beacon_manager.h"
 #include "pwnagotchi_peer.h"
 #include "handshake.h"
+#include "channel_ducb.h"
 #include <WiFi.h>
 #include "esp_wifi.h"
 #include <lvgl.h>
@@ -90,6 +91,12 @@ static void parse_and_dispatch(const uint8_t *frame, int len,
     for (int i = 0; i < WBM_MAX_CONSUMERS; i++) {
         if (s_consumers[i]) s_consumers[i](&b);
     }
+
+    // Credit the channel we heard this beacon on — the D-UCB bandit uses
+    // these rewards to concentrate future hops on channels that are actually
+    // producing infrastructure APs, instead of grinding through empty ones
+    // in round-robin.
+    channel_ducb_reward((int)ch, 1.0);
 }
 
 static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
@@ -106,8 +113,14 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
 
 static void on_channel_hop(lv_timer_t *)
 {
-    s_hop_ch = (s_hop_ch % 13) + 1;
+    // Ask the bandit for the next channel; falls back to round-robin
+    // behaviour for the first ~13 hops via forced exploration, then hones
+    // in on productive channels.
+    int next = channel_ducb_select();
+    if (next < 1 || next > 13) next = (s_hop_ch % 13) + 1;
+    s_hop_ch = (uint8_t)next;
     esp_wifi_set_channel(s_hop_ch, WIFI_SECOND_CHAN_NONE);
+    channel_ducb_pull(s_hop_ch);
 }
 
 static bool start_wifi()
@@ -124,8 +137,10 @@ static bool start_wifi()
     };
     esp_wifi_set_promiscuous_filter(&filter);
     esp_wifi_set_promiscuous_rx_cb(promisc_cb);
+    channel_ducb_reset();
     s_hop_ch   = 1;
     esp_wifi_set_channel(s_hop_ch, WIFI_SECOND_CHAN_NONE);
+    channel_ducb_pull(s_hop_ch);
     s_hop_timer = lv_timer_create(on_channel_hop, 200, nullptr);
     return true;
 }
