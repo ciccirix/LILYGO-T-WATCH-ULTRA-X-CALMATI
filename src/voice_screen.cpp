@@ -365,32 +365,34 @@ static void build()
     lv_label_set_text(s_status, "Tocca PARLA e fai la domanda");
 
     // voicebox KITT: riquadro nero con 3 colonne di segmenti rossi rettangolari.
+    // Sized generously so the wake-word listener's own level meter (planned
+    // ESP-SR path) also gets room to breathe — see docs/esp-sr-plan.md.
     lv_obj_t *kitt = lv_obj_create(s_scr);
-    lv_obj_set_size(kitt, LV_SIZE_CONTENT, 64);
+    lv_obj_set_size(kitt, LV_SIZE_CONTENT, 130);
     lv_obj_set_style_bg_color(kitt, lv_color_black(), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(kitt, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(kitt, 2, LV_PART_MAIN);
     lv_obj_set_style_border_color(kitt, lv_color_make(0x1a, 0x1a, 0x1a), LV_PART_MAIN);
     lv_obj_set_style_radius(kitt, 4, LV_PART_MAIN);
-    lv_obj_set_style_pad_hor(kitt, 18, LV_PART_MAIN);
-    lv_obj_set_style_pad_ver(kitt, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(kitt, 28, LV_PART_MAIN);
+    lv_obj_set_style_pad_ver(kitt, 12, LV_PART_MAIN);
     lv_obj_clear_flag(kitt, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(kitt, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(kitt, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(kitt, 14, LV_PART_MAIN);   // spazio fra le 3 barre
+    lv_obj_set_style_pad_column(kitt, 22, LV_PART_MAIN);   // spazio fra le 3 barre
     for (int col = 0; col < NCOL; col++) {
         lv_obj_t *bar = lv_obj_create(kitt);
-        lv_obj_set_size(bar, 24, LV_SIZE_CONTENT);
+        lv_obj_set_size(bar, 40, LV_SIZE_CONTENT);
         lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_style_border_width(bar, 0, LV_PART_MAIN);
         lv_obj_set_style_pad_all(bar, 0, LV_PART_MAIN);
-        lv_obj_set_style_pad_row(bar, 3, LV_PART_MAIN);
+        lv_obj_set_style_pad_row(bar, 5, LV_PART_MAIN);
         lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_COLUMN_REVERSE);   // riempie dal basso
         lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         for (int s = 0; s < COL_MAX[col]; s++) {
             lv_obj_t *seg = lv_obj_create(bar);
-            lv_obj_set_size(seg, 24, 5);             // rettangolo largo e basso
+            lv_obj_set_size(seg, 40, 10);             // rettangolo largo e basso
             lv_obj_set_style_radius(seg, 1, LV_PART_MAIN);
             lv_obj_set_style_border_width(seg, 0, LV_PART_MAIN);
             lv_obj_set_style_bg_color(seg, lv_color_make(0x1a, 0x02, 0x00), LV_PART_MAIN);
