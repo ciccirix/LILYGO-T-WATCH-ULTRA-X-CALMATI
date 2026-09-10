@@ -1,6 +1,7 @@
 #include "console.h"
 #include "adsb.h"
 #include "mic_rec.h"
+#include "wake_word.h"
 #include "webpanel.h"
 #include "tracker_ring.h"
 #include <LilyGoLib.h>
@@ -56,6 +57,8 @@ static void cmd_help(String &o)
          "  radar list           nearest aircraft\n"
          "  mic start|stop       recorder control\n"
          "  mic status           recorder state\n"
+         "  sr on|off            offline wake-word engine (Hi ESP)\n"
+         "  sr status            wake-word state + last energy\n"
          "  recs                 list /Recordings\n"
          "  bright <0-255>       screen brightness\n"
          "  buzz                 test the haptic\n"
@@ -161,6 +164,38 @@ static void cmd_mic(char **av, int ac, String &o)
     o += "usage: mic start|stop|status\n";
 }
 
+static void cmd_sr(char **av, int ac, String &o)
+{
+    if (ac < 2 || eq(av[1], "status")) {
+        o += "sr: ";
+        if (wake_word_is_active()) {
+            o += "listening  energy "; o += String(wake_word_get_energy());
+            if (wake_word_pending_detection()) {
+                wake_word_consume_detection();
+                o += "  *WAKE DETECTED*";
+            }
+        } else {
+            const char *st = wake_word_status_text();
+            o += (st && st[0]) ? st : "off";
+        }
+        o += "\n";
+        return;
+    }
+    if (eq(av[1], "on")) {
+        if (mic_rec_is_recording()) mic_rec_stop();
+        bool ok = wake_word_start();
+        o += ok ? "sr: listening for 'Hi ESP'\n" : "sr: FAILED — ";
+        if (!ok) { o += wake_word_status_text(); o += "\n"; }
+        return;
+    }
+    if (eq(av[1], "off")) {
+        wake_word_stop();
+        o += "sr: off\n";
+        return;
+    }
+    o += "usage: sr on|off|status\n";
+}
+
 static void cmd_recs(String &o)
 {
     if (!instance.isCardReady()) { o += "no SD card\n"; return; }
@@ -183,6 +218,7 @@ static void cmd_status(String &o)
     o += "  gps "; o += (gps_ok() ? "fix" : "--");
     o += "  radar "; o += (adsb_is_running() ? "on" : "off");
     o += "  mic "; o += (mic_rec_is_recording() ? "REC" : "idle");
+    o += "  sr "; o += (wake_word_is_active() ? "LIS" : "off");
     o += "\n";
 }
 
@@ -209,6 +245,7 @@ void console_exec(const char *line, String &out)
     else if (eq(av[0], "wifi"))                   cmd_wifi(out);
     else if (eq(av[0], "radar"))                  cmd_radar(av, ac, out);
     else if (eq(av[0], "mic"))                    cmd_mic(av, ac, out);
+    else if (eq(av[0], "sr"))                     cmd_sr(av, ac, out);
     else if (eq(av[0], "recs"))                   cmd_recs(out);
     else if (eq(av[0], "bright") && ac >= 2)    { instance.setBrightness(constrain(atoi(av[1]), 0, 255)); out += "ok\n"; }
     else if (eq(av[0], "buzz"))                 { instance.vibrator(); out += "buzz\n"; }
