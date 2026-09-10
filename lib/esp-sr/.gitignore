@@ -1,0 +1,9 @@
+# The vendored esp-sr blobs (~13 MB of .a archives + the 285 KB packed
+# srmodels.bin) live outside git — scripts/fetch_esp_sr.py downloads them
+# from the ESP Component Registry on first build. That keeps a checkout of
+# this repo well under the size it would balloon to if the blobs lived in
+# history. The library.json + include/ + src/ (source-controlled) already
+# describe the interface and one .c file, which is all the rest of the
+# firmware links against.
+libs/
+models/srmodels.bin

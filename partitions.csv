@@ -8,5 +8,10 @@
 nvs,        data, nvs,      0x9000,   0x5000,
 otadata,    data, ota,      0xe000,   0x2000,
 app0,       app,  ota_0,    0x10000,  0x600000,
-ffat,       data, fat,      0x610000, 0x9E0000,
+# ESP-SR needs a labelled partition (type=data, subtype=0x82 aka "spiffs" per
+# the esp-sr CMakeLists) to load srmodels.bin from. 512 KB is enough for the
+# wn9_hiesp wake-word model on its own (~285 KB packed) with headroom for a
+# second wake word or a MultiNet CTC command model added later.
+model,      data, spiffs,   0x610000, 0x80000,
+ffat,       data, fat,      0x690000, 0x960000,
 coredump,   data, coredump, 0xFF0000, 0x10000,

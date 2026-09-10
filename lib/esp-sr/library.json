@@ -1,0 +1,27 @@
+{
+  "name": "esp-sr",
+  "version": "1.9.5-vendored",
+  "description": "Vendored ESP-SR (WakeNet + AFE + MultiNet) precompiled static libs for ESP32-S3, extracted from espressif/esp-sr@1.9.5 release. Fetch script in scripts/fetch_esp_sr.py.",
+  "keywords": ["voice", "speech-recognition", "wake-word", "esp32-s3", "vendored"],
+  "license": "MIT",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "build": {
+    "libArchive": false,
+    "flags": [
+      "-Iinclude/esp-sr",
+      "-Llibs/esp32s3",
+      "-lwakenet",
+      "-lmultinet",
+      "-lesp_audio_front_end",
+      "-lesp_audio_processor",
+      "-lnsnet",
+      "-lhufzip",
+      "-lc_speech_features",
+      "-ldl_lib",
+      "-lfst",
+      "-lflite_g2p"
+    ],
+    "srcFilter": ["+<*.c>"]
+  }
+}
