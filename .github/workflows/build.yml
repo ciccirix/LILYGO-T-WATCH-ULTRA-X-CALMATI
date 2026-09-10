@@ -43,16 +43,23 @@ jobs:
         run: |
           BUILD=.pio/build/twatch_ultra
           BOOT_APP0=$(find ~/.platformio/packages -name boot_app0.bin | head -1)
+          SR_MODELS=lib/esp-sr/models/srmodels.bin
           echo "boot_app0 = $BOOT_APP0"
+          echo "srmodels  = $SR_MODELS ($(stat -c%s "$SR_MODELS" 2>/dev/null || echo missing) B)"
+          # srmodels.bin lands at the offset of the 'model' partition
+          # (see partitions.csv) so the web-flasher writes both the app
+          # and the WakeNet blob in one shot.
           python -m esptool --chip esp32s3 merge_bin \
             -o 1337-threat-radar-merged.bin \
             --flash_mode qio --flash_freq 80m --flash_size 16MB \
             0x0 "$BUILD/bootloader.bin" \
             0x8000 "$BUILD/partitions.bin" \
             0xe000 "$BOOT_APP0" \
-            0x10000 "$BUILD/firmware.bin"
+            0x10000 "$BUILD/firmware.bin" \
+            0x610000 "$SR_MODELS"
           cp "$BUILD/firmware.bin" "$BUILD/bootloader.bin" "$BUILD/partitions.bin" .
-          ls -la 1337-threat-radar-merged.bin firmware.bin
+          cp "$SR_MODELS" srmodels.bin
+          ls -la 1337-threat-radar-merged.bin firmware.bin srmodels.bin
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -63,6 +70,7 @@ jobs:
             firmware.bin
             bootloader.bin
             partitions.bin
+            srmodels.bin
 
       - name: Publish rolling "latest" release (main)
         if: github.ref == 'refs/heads/main'
