@@ -241,6 +241,85 @@ That's it. If step 1-4 works, everything else (MultiNet, tile hookup,
 UI) is straightforward. If step 1 fights, we know to switch to the
 dual-project setup and lose a session on plumbing.
 
+---
+
+## What actually happened in the 2026-09-09 attempt
+
+I tried both roads in one session; both hit structural blockers that
+are recoverable but not one-session cheap. Recording it here so the
+next attempt starts from real ground, not from the hopeful plan above.
+
+### Strada A findings (bump platform to pioarduino v55.03.311)
+
+1. **The bump itself works.** pioarduino 55.03.311 installs cleanly
+   under `.platformio/platforms/espressif32/`, tools download, IDF 5.4
+   is live. The MSYS/MinGW detection in `idf_tools.py` refuses to run
+   from Git Bash — the fix is to launch `pio` from `cmd.exe` (or a
+   `.bat` wrapper), not from Bash.
+2. **Bluedroid is gone.** arduino-esp32 3.3.11's precompiled libs
+   ship WITH NIMBLE ONLY. Setting `CONFIG_BT_BLUEDROID_ENABLED=y` in
+   `sdkconfig.defaults` is a no-op because Kconfig is baked at
+   pre-compile time, not per project build. This is the show-stopper:
+   the fork's `ble_scan_manager` plus ~10 downstream tiles (AirTag,
+   Flipper, Skimmer, Flock, BLE Audit, GATT explorer, Drone ID,
+   Meta glasses, Evil-Twin verify, Phone Link) all speak the
+   `esp_gap_ble_api.h` / `esp_gatts_api.h` Bluedroid dialect. A port
+   to NimBLE is weeks of work.
+3. **I2S API porting is straightforward.** `alarm.cpp`'s legacy
+   `i2s_set_clk(I2S_NUM_1, …)` maps 1:1 onto
+   `instance.player.configureTX(rate, I2S_DATA_BIT_WIDTH_16BIT,
+   I2S_SLOT_MODE_MONO)` — LilyGoLib's player is already an `I2SClass`
+   under IDF ≥ 5.0. Same trick strips the legacy `driver/i2s.h`
+   include from `esp_codec.cpp` via the pre-build patch script. This
+   fix committed on the `esp-sr-poc` branch is reusable regardless of
+   what platform we end up on.
+
+### Strada B findings (`idf_component.yml` on espressif32@6.10.0)
+
+1. **Component Manager runs, but only for the ESP-IDF framework.**
+   `espressif32@6.10.0` enables the IDF component manager, but only
+   in `framework = espidf` (or the hybrid `arduino, espidf`) mode. In
+   a pure `framework = arduino` project (ours), `idf_component.yml`
+   is silently ignored — the build passes but esp-sr is never pulled
+   in and never linked.
+2. **The hybrid setup is a real change.** Switching to
+   `framework = arduino, espidf` needs a `main/` folder with a
+   `CMakeLists.txt` that pulls in the Arduino component, a
+   `sdkconfig.defaults`, a `partitions.csv` re-declared to Kconfig,
+   and often a rewrite of the entry point. Doable but not a session.
+
+### Real next step (both roads combined)
+
+The pragmatic path that avoids the Bluedroid rewrite AND the hybrid
+framework refactor is a **third road** we didn't try:
+
+- **Skainet-style vendored blobs.** Ship a `lib/esp-sr/` directory
+  with (a) the WakeNet-only header set, (b) the precompiled `.a`
+  archive for xtensa-esp32s3-elf built by Espressif, and (c) the
+  packed model `srmodels.bin` flashed to a dedicated 500 KB partition.
+  No component manager needed, no framework refactor, no Bluedroid
+  swap — because we stay on the existing `espressif32@6.10.0` with
+  arduino-esp32 2.x and its Bluedroid intact.
+
+  Trade-off: we hand-maintain the .a. Espressif publishes them
+  attached to each ESP-SR release. Recipe:
+  1. Grab `libwakenet.a`, `libesp-sr.a`, `libmultinet.a` (and their
+     transitive deps like `libmodel_srmodels_ncm.a`) from the
+     esp-sr@1.9.x GitHub release for esp32s3 + IDF 5.1.
+  2. Drop them under `lib/esp-sr/src/` with the corresponding
+     `include/` headers, plus a `library.properties` and a
+     `library.json` pointing PlatformIO's LDF at the `.a`s.
+  3. Add a `sr_model, data, 0x82, 0x610000, 0x100000` entry to
+     `partitions.csv` and reclaim that MB from `ffat`.
+  4. `esptool.py write_flash 0x610000 srmodels.bin` once per model
+     update.
+  5. Wrapper C++ header exposing `wake_word_start()` /
+     `wake_word_poll_energy()` / `wake_word_callback()` — ~200 lines
+     around `esp_afe_sr_iface_t` and `esp_wn_iface_t`.
+
+The Skainet path leaves main/@6.10.0/Bluedroid alone entirely. It's
+the plan that survives contact with reality.
+
 ## References
 
 [sr-repo]: https://github.com/espressif/esp-sr
