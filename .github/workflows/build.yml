@@ -105,3 +105,4 @@ jobs:
             firmware.bin
             bootloader.bin
             partitions.bin
+            srmodels.bin
