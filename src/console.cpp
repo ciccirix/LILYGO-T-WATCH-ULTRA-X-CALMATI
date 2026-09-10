@@ -2,6 +2,7 @@
 #include "adsb.h"
 #include "mic_rec.h"
 #include "wake_word.h"
+#include "weather.h"
 #include "webpanel.h"
 #include "tracker_ring.h"
 #include <LilyGoLib.h>
@@ -59,6 +60,8 @@ static void cmd_help(String &o)
          "  mic status           recorder state\n"
          "  sr on|off            offline wake-word engine (Hi ESP)\n"
          "  sr status            wake-word state + last energy\n"
+         "  weather now          fetch ambient (WiFi 5s -> Open-Meteo -> off)\n"
+         "  weather status       last sample + age\n"
          "  recs                 list /Recordings\n"
          "  bright <0-255>       screen brightness\n"
          "  buzz                 test the haptic\n"
@@ -196,6 +199,44 @@ static void cmd_sr(char **av, int ac, String &o)
     o += "usage: sr on|off|status\n";
 }
 
+static void cmd_weather(char **av, int ac, String &o)
+{
+    if (ac < 2 || eq(av[1], "status")) {
+        WeatherSample s = weather_get();
+        if (!s.valid) {
+            o += "weather: no sample yet (";
+            o += weather_last_status_text();
+            o += ")\n";
+            return;
+        }
+        char b[96];
+        // Age in minutes for readability; more useful than millis on a
+        // widget that says "how fresh is this?".
+        uint32_t age_min = s.age_ms / 60000UL;
+        snprintf(b, sizeof(b), "weather: %.1f C  %d%%  %d hPa  %lu min ago\n",
+                 s.temp_c, s.humidity_pct, s.pressure_hpa,
+                 (unsigned long)age_min);
+        o += b;
+        o += "status: "; o += weather_last_status_text(); o += "\n";
+        return;
+    }
+    if (eq(av[1], "now")) {
+        if (weather_is_fetching()) {
+            o += "weather: already fetching\n";
+            return;
+        }
+        if (weather_fetch_async()) {
+            o += "weather: fetch started (poll with 'weather status')\n";
+        } else {
+            o += "weather: FAILED - ";
+            o += weather_last_status_text();
+            o += "\n";
+        }
+        return;
+    }
+    o += "usage: weather now|status\n";
+}
+
 static void cmd_recs(String &o)
 {
     if (!instance.isCardReady()) { o += "no SD card\n"; return; }
@@ -246,6 +287,7 @@ void console_exec(const char *line, String &out)
     else if (eq(av[0], "radar"))                  cmd_radar(av, ac, out);
     else if (eq(av[0], "mic"))                    cmd_mic(av, ac, out);
     else if (eq(av[0], "sr"))                     cmd_sr(av, ac, out);
+    else if (eq(av[0], "weather"))                cmd_weather(av, ac, out);
     else if (eq(av[0], "recs"))                   cmd_recs(out);
     else if (eq(av[0], "bright") && ac >= 2)    { instance.setBrightness(constrain(atoi(av[1]), 0, 255)); out += "ok\n"; }
     else if (eq(av[0], "buzz"))                 { instance.vibrator(); out += "buzz\n"; }

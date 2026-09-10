@@ -41,6 +41,7 @@
 #include "espnow_screen.h"
 #include "esp_now_link.h"
 #include "onboarding.h"
+#include "weather.h"
 #include "tpms_screen.h"
 #include "timezone.h"
 #include "tpms.h"
@@ -1240,6 +1241,39 @@ static void update_clock()
 
     update_defcon_countdown(&t);   // keep the DEF CON 34 countdown live
 
+    // Refresh the weather widget from whatever the cache last has. Text is
+    // "—" when nothing has been fetched yet; "fetching..." while a fetch is
+    // in flight; "22.4 C · 65% · 1013  15m ago" once a real sample landed.
+    if (defcon_vegas) {
+        char wbuf[64];
+        if (weather_is_fetching()) {
+            snprintf(wbuf, sizeof(wbuf), LV_SYMBOL_REFRESH "  meteo...");
+        } else {
+            WeatherSample w = weather_get();
+            if (!w.valid) {
+                snprintf(wbuf, sizeof(wbuf), LV_SYMBOL_REFRESH "  meteo -");
+            } else {
+                uint32_t age_min = w.age_ms / 60000UL;
+                const char *age_lbl =
+                    (age_min < 1)     ? "ora" :
+                    (age_min < 60)    ? nullptr :
+                    (age_min < 24*60) ? nullptr : "vecchio";
+                if (age_lbl)
+                    snprintf(wbuf, sizeof(wbuf), "%.0fC  %d%%  %d hPa  %s",
+                             w.temp_c, w.humidity_pct, w.pressure_hpa, age_lbl);
+                else if (age_min < 60)
+                    snprintf(wbuf, sizeof(wbuf), "%.0fC  %d%%  %d hPa  %lum",
+                             w.temp_c, w.humidity_pct, w.pressure_hpa,
+                             (unsigned long)age_min);
+                else
+                    snprintf(wbuf, sizeof(wbuf), "%.0fC  %d%%  %d hPa  %luh",
+                             w.temp_c, w.humidity_pct, w.pressure_hpa,
+                             (unsigned long)(age_min / 60));
+            }
+        }
+        lv_label_set_text(defcon_vegas, wbuf);
+    }
+
     char date_buf[32];
     if (clock_show_day && clock_show_date)
         strftime(date_buf, sizeof(date_buf), "%A\n%B %d, %Y", &t);
@@ -1332,6 +1366,7 @@ void setup()
 
     // Load the saved alarm-clock configuration from the SD card (if present).
     alarm_init();
+    weather_init();     // restores last ambient reading from NVS (may be blank)
 
     // Build the clock screen
     clock_screen = lv_obj_create(NULL);
@@ -1446,13 +1481,21 @@ void setup()
     lv_obj_align(defcon_logo, LV_ALIGN_TOP_MID, 0, 48);   // below the status-icon row
     lv_obj_clear_flag(defcon_logo, LV_OBJ_FLAG_CLICKABLE);
 
-    // "LAS VEGAS" in celeste, just under the time.
+    // Weather row (real, on-demand from Open-Meteo). Replaces the old "LAS
+    // VEGAS" label so the space it took carries a genuinely useful reading
+    // — tap it to refresh (WiFi comes on for ~5 s only). Empty state is
+    // "—" so we never imply we have a live value we don't have.
     defcon_vegas = lv_label_create(clock_screen);
-    lv_obj_set_style_text_font(defcon_vegas, &lv_font_montserrat_28, LV_PART_MAIN);
+    lv_obj_set_style_text_font(defcon_vegas, &lv_font_montserrat_20, LV_PART_MAIN);
     lv_obj_set_style_text_color(defcon_vegas, lv_color_make(0x00, 0xE8, 0xFF), LV_PART_MAIN);
-    lv_obj_set_style_text_letter_space(defcon_vegas, 4, LV_PART_MAIN);
-    lv_label_set_text(defcon_vegas, "LAS VEGAS");
+    lv_obj_set_style_text_letter_space(defcon_vegas, 2, LV_PART_MAIN);
+    lv_label_set_text(defcon_vegas, LV_SYMBOL_REFRESH "  meteo");
     lv_obj_align(defcon_vegas, LV_ALIGN_CENTER, 0, 112);
+    lv_obj_add_flag(defcon_vegas, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(defcon_vegas, 20);   // generous tap zone
+    lv_obj_add_event_cb(defcon_vegas, [](lv_event_t *) {
+        weather_fetch_async();   // no-op if already fetching / no GPS / no wifi
+    }, LV_EVENT_CLICKED, NULL);
 
     // Countdown to DEF CON 34 opening, in fucsia, at the bottom.
     defcon_countdown = lv_label_create(clock_screen);
