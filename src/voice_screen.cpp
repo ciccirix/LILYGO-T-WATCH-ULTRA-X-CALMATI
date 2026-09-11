@@ -1,7 +1,6 @@
 #include "voice_screen.h"
 #include "tools_screen.h"        // tools_screen_show() per il back-gesture
 #include "mic_rec.h"             // registrazione WAV 16k mono su SD
-#include "wake_word.h"           // offline "Hi ESP" wake-word engine (ESP-SR)
 #include "wifi_creds.h"          // credenziali WiFi (NVS / wifi.txt)
 #include <Arduino.h>
 #include <lvgl.h>
@@ -25,7 +24,6 @@
 #define REC_CAP_MS  8000        // stop automatico registrazione a 8s (~256KB)
 
 static lv_obj_t  *s_scr, *s_status, *s_btn, *s_btnlbl, *s_you, *s_udda;
-static lv_obj_t  *s_sr_btn = nullptr, *s_sr_btnlbl = nullptr;
 static lv_timer_t *s_tick = nullptr;
 
 // --- voicebox stile KITT (Supercar): fila di LED rossi che pulsano col mic ---
@@ -204,43 +202,9 @@ static bool load_wav()
     return true;
 }
 
-// Handler for the "🎙️ SR" toggle button — brings the offline wake-word
-// engine up or tears it down. Fully local: no WiFi, no UDDA hop.
-static void on_sr_btn(lv_event_t *)
-{
-    if (wake_word_is_active()) {
-        wake_word_stop();
-        lv_label_set_text(s_sr_btnlbl, "SR OFF");
-        set_status("Wake-word fermato");
-    } else {
-        // The UDDA-audio path is mutually exclusive — both use the same PDM
-        // mic. Stop any recording in flight first so we don't fight it.
-        if (mic_rec_is_recording()) mic_rec_stop();
-        if (wake_word_start()) {
-            lv_label_set_text(s_sr_btnlbl, "SR ON");
-            set_status("In ascolto: 'Hi ESP'");
-        } else {
-            // wake_word_start() populated the reason itself — surface it.
-            set_status(wake_word_status_text());
-        }
-    }
-}
-
 // --- macchina a stati sul task LVGL -----------------------------------------
 static void tick_cb(lv_timer_t *)
 {
-    // Offline wake-word engine has priority over the UDDA state machine:
-    // when it's running, drive the KITT bars from its own audio energy and
-    // surface any wake-word detection immediately. The UDDA switch case
-    // below still runs so a REC/UPLOAD in flight can complete cleanly.
-    if (wake_word_is_active()) {
-        kitt_set(wake_word_get_energy());
-        if (wake_word_pending_detection()) {
-            wake_word_consume_detection();
-            lv_label_set_text(s_udda, "🎙️  HO SENTITO 'HI ESP'");
-        }
-    }
-
     switch (s_state) {
     case V_REC: {
         kitt_set(mic_rec_level());
@@ -450,19 +414,6 @@ static void build()
     lv_obj_set_style_text_font(s_btnlbl, &lv_font_montserrat_28, LV_PART_MAIN);
     lv_label_set_text(s_btnlbl, "PARLA");
     lv_obj_center(s_btnlbl);
-
-    // Second button: toggle the offline ESP-SR wake-word engine. Deliberately
-    // smaller than PARLA so the cloud-fallback path stays visually primary
-    // for now — the offline route is the "advanced" mode until we ship
-    // MultiNet commands.
-    s_sr_btn = lv_button_create(s_scr);
-    lv_obj_set_size(s_sr_btn, 170, 54);
-    lv_obj_set_style_bg_color(s_sr_btn, lv_color_make(0x22, 0x22, 0x66), LV_PART_MAIN);
-    lv_obj_add_event_cb(s_sr_btn, on_sr_btn, LV_EVENT_CLICKED, nullptr);
-    s_sr_btnlbl = lv_label_create(s_sr_btn);
-    lv_obj_set_style_text_font(s_sr_btnlbl, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_label_set_text(s_sr_btnlbl, "SR OFF");
-    lv_obj_center(s_sr_btnlbl);
 
     s_you = lv_label_create(s_scr);
     lv_obj_set_style_text_color(s_you, lv_color_make(0x33, 0xBB, 0xFF), LV_PART_MAIN);
